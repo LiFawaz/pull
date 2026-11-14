@@ -2,21 +2,29 @@
 
 A Valenced plugin for moving only the Discord accounts you explicitly configure into your current voice channel.
 
+## Quick commands
+
+Pull now adds local slash commands to Discord's command picker through Coco's Command Lib.
+
+Use `/pull` and enter 5–20 different Discord user IDs in the `ids` field. Separate IDs with spaces or commas. The command saves those IDs and starts Pull without opening plugin settings.
+
+Use `/unpull` to stop all moves. The saved IDs remain in the plugin settings so you can reuse them later.
+
+These are local client commands, not server-registered bot commands. They do not send a command message into the channel.
+
 ## Build on GitHub
 
 Every push to `main` starts the **Build Pull plugin** GitHub Actions workflow. You can also start it manually from the Actions tab.
 
-When the workflow succeeds, open its run and download the `pull-1.0.1-install-zip` artifact. Install that ZIP from Valenced > Settings > Valenced > Plugins > settings gear > Install from file.
+When the workflow succeeds, open its run and download the `pull-1.0.2-install-zip` artifact. Install that ZIP from Valenced > Settings > Valenced > Plugins > settings gear > Install from file.
 
 ## Configure
 
-Open Pull's plugin settings and paste the Discord user IDs you want to move. Use one ID per line or separate them with commas. The current version accepts up to 20 IDs.
+The plugin settings still allow you to paste Discord user IDs manually. Use one ID per line or separate them with commas. Up to 20 IDs are supported.
 
-Press **Start Pull** to arm it. Join a voice channel in the server where the configured accounts are connected. Pull moves only configured accounts that are already connected to voice in that same server.
+Join a voice channel in the server where the configured accounts are connected. Pull moves only configured accounts that are already connected to voice in that same server.
 
 When you switch voice channels, Pull checks again and moves those configured accounts to your new channel. If a configured account disconnects and later joins voice, Pull checks it again.
-
-Press **Stop Pull** to stop all automatic moves.
 
 ## Permission and safety behavior
 
@@ -24,7 +32,7 @@ Press **Stop Pull** to stop all automatic moves.
 - Pull also checks **Connect** in the destination channel.
 - It does not bypass permission checks or try to move accounts from another server.
 - It does not act on accounts that are not in voice.
-- Only IDs explicitly entered in the settings are eligible; it does not scan or move other server members.
+- Only IDs explicitly entered with `/pull` or in the settings are eligible; it does not scan or move other server members.
 - Per-account and global move limits prevent rapid repeat moves. A target that is moved repeatedly is temporarily paused.
 - Discord may record voice moves in the server audit log.
 

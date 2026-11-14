@@ -1,4 +1,5 @@
 import React from 'react'
+import { ToastActionCreators } from '@valenced/discord/actions'
 import { Pressable, ScrollView, Text, TextInput, View } from 'react-native'
 import { getStore, onAnyFluxEventDispatched } from '@valenced/discord/flux'
 import { lookupModules } from '@valenced/modules/finders'
@@ -111,7 +112,8 @@ export default plugin<{ jsonStorage: PullSettings }>({
         default: DEFAULT_SETTINGS,
     },
 
-    start({ cleanup, jsonStorage, logger }) {
+    start(api) {
+        const { cleanup, jsonStorage, logger } = api
         let stopped = false
         let reconcileTimer: ReturnType<typeof setTimeout> | null = null
         let pollTimer: ReturnType<typeof setInterval> | null = null
@@ -140,6 +142,109 @@ export default plugin<{ jsonStorage: PullSettings }>({
             }
             logger?.log?.('[Pull]', message)
         }
+
+
+        const commandUnsubscribers: Array<() => void> = []
+
+        function commandToast(message: string, variant: 'default' | 'success' | 'critical' = 'default') {
+            try {
+                ToastActionCreators.open('PULL_COMMAND', {
+                    text: `[Pull] ${message}`,
+                    variant,
+                })
+            } catch (error) {
+                logger?.error?.('[Pull] Could not show command feedback', error)
+            }
+        }
+
+        function parseCommandIds(value: unknown): { ids: string[]; error: string | null } {
+            const parts = String(value ?? '').trim().split(/[\\s,;]+/).filter(Boolean)
+            if (!parts.length) {
+                return { ids: [], error: 'Enter at least 5 Discord user IDs.' }
+            }
+
+            if (parts.some(id => !/^\\d{15,22}$/.test(id))) {
+                return { ids: [], error: 'IDs must be numeric Discord user IDs, separated by spaces or commas.' }
+            }
+
+            const ids = [...new Set(parts)]
+            if (ids.length < 5) {
+                return { ids: [], error: 'You must enter at least 5 different user IDs.' }
+            }
+            if (ids.length > MAX_TARGETS) {
+                return { ids: [], error: `You can enter up to ${MAX_TARGETS} user IDs.` }
+            }
+
+            return { ids, error: null }
+        }
+
+        function registerPullCommands() {
+            try {
+                const commandRegistry = (api as any).commands?.commands
+                if (typeof commandRegistry?.registerCommand !== 'function') {
+                    throw new Error("Coco's Command Lib is unavailable.")
+                }
+
+                commandUnsubscribers.push(commandRegistry.registerCommand({
+                    name: 'pull',
+                    displayName: 'pull',
+                    description: 'Move 5 to 20 of your alt accounts into your current voice channel',
+                    displayDescription: 'Move 5 or more of your alt accounts into your current voice channel',
+                    applicationId: '-1',
+                    inputType: 1,
+                    type: 1,
+                    shouldHide: () => false,
+                    options: [
+                        {
+                            name: 'ids',
+                            displayName: 'ids',
+                            description: 'Enter 5–20 Discord user IDs separated by spaces or commas',
+                            displayDescription: 'Enter 5–20 Discord user IDs separated by spaces or commas',
+                            type: 3,
+                            required: true,
+                        },
+                    ],
+                    execute: async (args: any[]) => {
+                        const value = args?.find((arg: any) => arg?.name === 'ids')?.value ?? args?.[0]?.value
+                        const parsed = parseCommandIds(value)
+                        if (parsed.error) {
+                            commandToast(parsed.error, 'critical')
+                            return
+                        }
+
+                        await jsonStorage.set({
+                            userIds: parsed.ids.join('\\n'),
+                            enabled: true,
+                        })
+                        status(`Pull is armed for ${parsed.ids.length} configured accounts.`)
+                        scheduleReconcile()
+                        commandToast(`Pull started for ${parsed.ids.length} accounts.`, 'success')
+                    },
+                }))
+
+                commandUnsubscribers.push(commandRegistry.registerCommand({
+                    name: 'unpull',
+                    displayName: 'unpull',
+                    description: 'Stop moving your configured alt accounts',
+                    displayDescription: 'Stop moving your configured alt accounts',
+                    applicationId: '-1',
+                    inputType: 1,
+                    type: 1,
+                    shouldHide: () => false,
+                    execute: async () => {
+                        await jsonStorage.set({ enabled: false })
+                        status('Pull is stopped.')
+                        scheduleReconcile()
+                        commandToast('All pulling has been stopped.', 'success')
+                    },
+                }))
+            } catch (error) {
+                logger?.error?.('[Pull] Could not register slash commands', error)
+                status("Slash commands are unavailable. Check that Coco's Command Lib is installed.")
+            }
+        }
+
+        registerPullCommands()
 
         function getCurrentUserId(): string | null {
             try {
@@ -516,6 +621,7 @@ export default plugin<{ jsonStorage: PullSettings }>({
             unsubscribeUserStore,
             unsubscribeVoiceStore,
             unsubscribeChannelStore,
+            ...commandUnsubscribers,
             () => {
                 stopped = true
                 if (reconcileTimer) clearTimeout(reconcileTimer)
