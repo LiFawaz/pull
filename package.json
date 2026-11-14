@@ -1,0 +1,21 @@
+{
+  "name": "@lifawaz/pull",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "valenced-plugin build"
+  },
+  "dependencies": {
+    "@valenced/plugin-cli": "git+https://github.com/Valenced/valenced-plugin-cli.git",
+    "@valenced/types": "git+https://github.com/Valenced/valenced-types.git"
+  },
+  "devDependencies": {
+    "@types/react": "^19.2.18",
+    "react-native": "0.81.6",
+    "typescript": "^7.0.2"
+  },
+  "trustedDependencies": [
+    "@valenced/plugin-cli",
+    "@swc/core"
+  ]
+}
