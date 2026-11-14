@@ -6,7 +6,7 @@ A Valenced plugin for moving only the Discord accounts you explicitly configure 
 
 Pull now adds local slash commands to Discord's command picker through Coco's Command Lib.
 
-Use `/pull` and enter 1–20 different Discord user IDs in the `ids` field. Separate IDs with spaces or commas. The command saves those IDs and starts Pull without opening plugin settings.
+Use `/pull` and fill `id1`, `id2`, `id3`, and so on. `id1` is required; the other fields are optional. Enter 1–20 different Discord user IDs, one per field. The command saves those IDs and starts Pull without opening plugin settings.
 
 Use `/unpull` to stop all moves. The saved IDs remain in the plugin settings so you can reuse them later.
 
@@ -16,7 +16,7 @@ These are local client commands, not server-registered bot commands. They do not
 
 Every push to `main` starts the **Build Pull plugin** GitHub Actions workflow. You can also start it manually from the Actions tab.
 
-When the workflow succeeds, open its run and download the `pull-1.0.3-install-zip` artifact. Install that ZIP from Valenced > Settings > Valenced > Plugins > settings gear > Install from file.
+When the workflow succeeds, open its run and download the `pull-1.0.4-install-zip` artifact. Install that ZIP from Valenced > Settings > Valenced > Plugins > settings gear > Install from file.
 
 ## Configure
 

@@ -2,7 +2,7 @@ import React from 'react'
 import { ToastActionCreators } from '@valenced/discord/actions'
 import { Pressable, ScrollView, Text, TextInput, View } from 'react-native'
 import { getStore, onAnyFluxEventDispatched } from '@valenced/discord/flux'
-import { lookupModules } from '@valenced/modules/finders'
+import { getModules, lookupModules } from '@valenced/modules/finders'
 import { withProps } from '@valenced/modules/finders/filters'
 
 interface PullSettings {
@@ -83,28 +83,6 @@ function findPermissionModule(): any {
     return null
 }
 
-function findRestModule(): any {
-    const exact = findNamedModule('RestAPI', 'patch')
-    if (exact) return exact
-
-    try {
-        for (const [module] of lookupModules(withProps('patch', 'get'))) {
-            if (
-                module &&
-                typeof module.patch === 'function' &&
-                typeof module.get === 'function' &&
-                typeof module.getName === 'function' &&
-                String(module.getName()).toLowerCase().includes('rest')
-            ) {
-                return module
-            }
-        }
-    } catch {
-        // The REST module may not be initialized yet.
-    }
-
-    return null
-}
 
 export default plugin<{ jsonStorage: PullSettings }>({
     jsonStorage: {
@@ -157,19 +135,23 @@ export default plugin<{ jsonStorage: PullSettings }>({
             }
         }
 
-        function parseCommandIds(value: unknown): { ids: string[]; error: string | null } {
-            const parts = String(value ?? '').trim().split(/[\s,;]+/).filter(Boolean)
-            if (!parts.length) {
-                return { ids: [], error: 'Enter at least one Discord user ID.' }
+        function parseCommandIds(args: any[]): { ids: string[]; error: string | null } {
+            const values = (Array.isArray(args) ? args : [])
+                .filter((arg: any) => /^id\d+$/.test(String(arg?.name ?? '')))
+                .map((arg: any) => String(arg?.value ?? '').trim())
+                .filter((value: string) => value.length > 0)
+
+            if (!values.length) {
+                return { ids: [], error: 'Enter at least one ID in id1 or another ID field.' }
             }
 
-            if (parts.some(id => !/^\d{15,22}$/.test(id))) {
-                return { ids: [], error: 'IDs must be numeric Discord user IDs, separated by spaces or commas.' }
+            if (values.some((id: string) => !/^\d{15,22}$/.test(id))) {
+                return { ids: [], error: 'Each ID field must contain a numeric Discord user ID.' }
             }
 
-            const ids = [...new Set(parts)]
+            const ids = [...new Set(values)]
             if (ids.length > MAX_TARGETS) {
-                return { ids: [], error: `You can enter up to ${MAX_TARGETS} user IDs.` }
+                return { ids: [], error: `You can enter up to ${MAX_TARGETS} different user IDs.` }
             }
 
             return { ids, error: null }
@@ -185,25 +167,25 @@ export default plugin<{ jsonStorage: PullSettings }>({
                 commandUnsubscribers.push(commandRegistry.registerCommand({
                     name: 'pull',
                     displayName: 'pull',
-                    description: 'Move 1 to 20 of your alt accounts into your current voice channel',
-                    displayDescription: 'Move 1 to 20 of your alt accounts into your current voice channel',
+                    description: 'Move your configured alternate accounts into your current voice channel',
+                    displayDescription: 'Move your configured alternate accounts into your current voice channel',
                     applicationId: '-1',
                     inputType: 1,
                     type: 1,
                     shouldHide: () => false,
-                    options: [
-                        {
-                            name: 'ids',
-                            displayName: 'ids',
-                            description: 'Enter 1–20 Discord user IDs separated by spaces or commas',
-                            displayDescription: 'Enter 1–20 Discord user IDs separated by spaces or commas',
+                    options: Array.from({ length: MAX_TARGETS }, (_, index) => {
+                        const name = `id${index + 1}`
+                        return {
+                            name,
+                            displayName: name,
+                            description: `Discord user ID ${index + 1}`,
+                            displayDescription: `Enter the Discord user ID for account ${index + 1}`,
                             type: 3,
-                            required: true,
-                        },
-                    ],
+                            required: index === 0,
+                        }
+                    }),
                     execute: async (args: any[]) => {
-                        const value = args?.find((arg: any) => arg?.name === 'ids')?.value ?? args?.[0]?.value
-                        const parsed = parseCommandIds(value)
+                        const parsed = parseCommandIds(args)
                         if (parsed.error) {
                             commandToast(parsed.error, 'critical')
                             return
@@ -348,6 +330,20 @@ export default plugin<{ jsonStorage: PullSettings }>({
             scheduleReconcile()
         })
 
+        // Current Discord builds expose authenticated requests through the HTTP module.
+        // Subscribe for it as it initializes instead of searching for an obsolete RestAPI export.
+        const unsubscribeHttpModule = getModules(
+            withProps('HTTP', 'get', 'post', 'put', 'patch', 'del'),
+            (module: any) => {
+                const http = module?.HTTP
+                if (http && typeof http.patch === 'function') {
+                    restApi = http
+                    logger?.log?.('[Pull] Discord HTTP module is ready.')
+                    scheduleReconcile()
+                }
+            },
+        )
+
         async function reconcile() {
             if (stopped) return
             if (reconciling) {
@@ -406,10 +402,13 @@ export default plugin<{ jsonStorage: PullSettings }>({
             }
 
             permissionStore ??= findPermissionModule()
-            restApi ??= findRestModule()
 
-            if (!permissionStore || !restApi) {
-                status('Pull is waiting for Discord permission and REST modules to load.')
+            if (!permissionStore) {
+                status('Pull is waiting for Discord permission module to load.')
+                return
+            }
+            if (!restApi) {
+                status('Pull is waiting for Discord HTTP module (HTTP.patch) to load.')
                 return
             }
 
@@ -530,10 +529,19 @@ export default plugin<{ jsonStorage: PullSettings }>({
                 moving.add(job.userId)
 
                 try {
-                    await restApi.patch({
+                    const response = await restApi.patch({
                         url: `/guilds/${job.guildId}/members/${job.userId}`,
                         body: { channel_id: destinationInfo.channelId },
                     })
+                    const responseStatus = Number(response?.status ?? 0)
+                    if (response?.ok === false || responseStatus >= 400) {
+                        const requestError: any = new Error(
+                            `Discord HTTP PATCH failed with status ${responseStatus || 'unknown'}.`,
+                        )
+                        requestError.status = responseStatus
+                        requestError.body = response?.body
+                        throw requestError
+                    }
 
                     const stamp = Date.now()
                     moveHistory.set(job.userId, [...userMoves, stamp])
@@ -618,6 +626,7 @@ export default plugin<{ jsonStorage: PullSettings }>({
             unsubscribeUserStore,
             unsubscribeVoiceStore,
             unsubscribeChannelStore,
+            unsubscribeHttpModule,
             ...commandUnsubscribers,
             () => {
                 stopped = true
