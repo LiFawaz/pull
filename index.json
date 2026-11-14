@@ -8,13 +8,13 @@
       "description": "Move your configured alt accounts into your current voice channel, with /pull and /unpull commands.",
       "author": "Li Fawaz (https://github.com/LiFawaz)",
       "channels": {
-        "latest": "1.0.5"
+        "latest": "1.0.6"
       },
       "versions": {
-        "1.0.5": {
-          "url": "https://raw.githubusercontent.com/LiFawaz/pull/main/pool/com.lifawaz.pull%401.0.5.zip",
-          "sha256": "74f64ba6046298274a5e70751c6d79b775e43dbd955635481a8ec398815e484e",
-          "size": 4772,
+        "1.0.6": {
+          "url": "https://raw.githubusercontent.com/LiFawaz/pull/main/pool/com.lifawaz.pull%401.0.6.zip",
+          "sha256": "4bd3d60d7cebabef6f9ca4ff38d5f45507ed56e9d3570ae888bc2a870539bcf0",
+          "size": 5388,
           "dependencies": {
             "valenced.api": {
               "version": ">=1 <2"
