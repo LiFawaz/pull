@@ -2,7 +2,7 @@ import React from 'react'
 import { ToastActionCreators } from '@valenced/discord/actions'
 import { Pressable, ScrollView, Text, TextInput, View } from 'react-native'
 import { getStore, onAnyFluxEventDispatched } from '@valenced/discord/flux'
-import { getModules, lookupModules } from '@valenced/modules/finders'
+import { getModules } from '@valenced/modules/finders'
 import { withProps } from '@valenced/modules/finders/filters'
 
 interface PullSettings {
@@ -18,7 +18,6 @@ const DEFAULT_SETTINGS: PullSettings = {
 }
 
 const MOVE_MEMBERS = 1n << 24n
-const CONNECT = 1n << 20n
 const MAX_TARGETS = 20
 const MOVE_SPACING_MS = 400
 const DUPLICATE_COOLDOWN_MS = 800
@@ -49,39 +48,6 @@ function delay(ms: number): Promise<void> {
     return new Promise(resolve => setTimeout(resolve, ms))
 }
 
-function findNamedModule(name: string, requiredProp: string): any {
-    try {
-        for (const [module] of lookupModules(withProps('getName'))) {
-            if (
-                module &&
-                typeof module.getName === 'function' &&
-                module.getName() === name &&
-                typeof module[requiredProp] === 'function'
-            ) {
-                return module
-            }
-        }
-    } catch {
-        // The module finder can be unavailable during early startup.
-    }
-
-    return null
-}
-
-function findPermissionModule(): any {
-    const exact = findNamedModule('PermissionStore', 'can')
-    if (exact) return exact
-
-    try {
-        for (const [module] of lookupModules(withProps('can'))) {
-            if (module && typeof module.can === 'function') return module
-        }
-    } catch {
-        // Keep the feature disabled when permission checks are unavailable.
-    }
-
-    return null
-}
 
 
 export default plugin<{ jsonStorage: PullSettings }>({
@@ -234,38 +200,47 @@ export default plugin<{ jsonStorage: PullSettings }>({
             }
         }
 
-        function getVoiceState(userId: string): any {
-            try {
-                const direct = voiceStore?.getVoiceStateForUser?.(userId)
-                if (direct) return direct
-
-                const all = voiceStore?.getAllVoiceStates?.()
-                if (!all || typeof all !== 'object') return null
-
-                if (all[userId]) return all[userId]
-
-                for (const group of Object.values(all)) {
-                    if (group && typeof group === 'object' && (group as any)[userId]) {
-                        return (group as any)[userId]
-                    }
-                }
-            } catch (error) {
-                logger?.error?.('[Pull] Voice state lookup failed', error)
-            }
-            return null
-        }
-
         function getVoiceInfo(userId: string): {
             channelId: string | null
             guildId: string | null
             channel: any
         } {
-            const state = getVoiceState(userId)
+            let state: any = null
+            let indexedGuildId: string | null = null
+
+            // Discord stores voice states by guild, then user ID. The state
+            // itself does not always include guildId, so keep the map key.
+            try {
+                const all = voiceStore?.getAllVoiceStates?.()
+                if (all && typeof all === 'object') {
+                    for (const [guildId, members] of Object.entries(all)) {
+                        if (!members || typeof members !== 'object') continue
+                        const candidate = (members as any)[userId]
+                        if (!candidate) continue
+
+                        state = candidate
+                        if (guildId !== '@me') indexedGuildId = String(guildId)
+                        if (indexedGuildId) break
+                    }
+                }
+            } catch (error) {
+                logger?.error?.('[Pull] All voice states lookup failed', error)
+            }
+
+            // Fallback for client builds where only the per-user accessor is available.
+            if (!state) {
+                try {
+                    state = voiceStore?.getVoiceStateForUser?.(userId) ?? null
+                } catch (error) {
+                    logger?.error?.('[Pull] Per-user voice state lookup failed', error)
+                }
+            }
+
             if (!state) return { channelId: null, guildId: null, channel: null }
 
             const rawChannelId = state.channelId ?? state.channel_id
             const channelId = rawChannelId == null ? null : String(rawChannelId)
-            if (!channelId) return { channelId: null, guildId: null, channel: null }
+            if (!channelId) return { channelId: null, guildId: indexedGuildId, channel: null }
 
             let channel: any = null
             try {
@@ -275,6 +250,7 @@ export default plugin<{ jsonStorage: PullSettings }>({
             }
 
             const rawGuildId =
+                indexedGuildId ??
                 state.guildId ??
                 state.guild_id ??
                 channel?.guildId ??
@@ -292,10 +268,11 @@ export default plugin<{ jsonStorage: PullSettings }>({
             if (!sourceChannel || !destinationChannel) return false
 
             try {
+                // The current user is already connected to the destination voice
+                // channel, so CONNECT is not an additional requirement here.
                 return (
                     permissionStore.can(MOVE_MEMBERS, sourceChannel) === true &&
-                    permissionStore.can(MOVE_MEMBERS, destinationChannel) === true &&
-                    permissionStore.can(CONNECT, destinationChannel) === true
+                    permissionStore.can(MOVE_MEMBERS, destinationChannel) === true
                 )
             } catch (error) {
                 logger?.error?.('[Pull] Permission check failed', error)
@@ -329,11 +306,15 @@ export default plugin<{ jsonStorage: PullSettings }>({
             channelStore = store
             scheduleReconcile()
         })
+        const unsubscribePermissionStore = getStore('PermissionStore', (store: any) => {
+            permissionStore = store
+            scheduleReconcile()
+        })
 
         // Current Discord builds expose authenticated requests through the HTTP module.
         // Subscribe for it as it initializes instead of searching for an obsolete RestAPI export.
         const unsubscribeHttpModule = getModules(
-            withProps('HTTP', 'get', 'post', 'put', 'patch', 'del'),
+            withProps('HTTP', 'get', 'patch'),
             (module: any) => {
                 const http = module?.HTTP
                 if (http && typeof http.patch === 'function') {
@@ -401,10 +382,8 @@ export default plugin<{ jsonStorage: PullSettings }>({
                 return
             }
 
-            permissionStore ??= findPermissionModule()
-
             if (!permissionStore) {
-                status('Pull is waiting for Discord permission module to load.')
+                status('Pull is waiting for Discord PermissionStore to load.')
                 return
             }
             if (!restApi) {
@@ -490,6 +469,7 @@ export default plugin<{ jsonStorage: PullSettings }>({
             let moved = 0
             let failed = 0
             let rateLimited = false
+            let lastFailure = ''
 
             for (const job of jobs) {
                 if (stopped || !jsonStorage.cache?.enabled) break
@@ -563,6 +543,9 @@ export default plugin<{ jsonStorage: PullSettings }>({
                         permissionBlocked++
                     }
 
+                    lastFailure = statusCode
+                        ? `HTTP ${statusCode}${code ? ` (Discord code ${code})` : ''}`
+                        : String(error?.message ?? 'unknown request error')
                     logger?.error?.('[Pull] Could not move configured account', {
                         userId: job.userId,
                         guildId: job.guildId,
@@ -600,7 +583,7 @@ export default plugin<{ jsonStorage: PullSettings }>({
                 permissionBlocked ? `${permissionBlocked} blocked by channel permissions.` : '',
                 notInVoice ? `${notInVoice} not in voice.` : '',
                 otherServer ? `${otherServer} in another server.` : '',
-                failed ? `${failed} move(s) failed; check permissions and debug logs.` : '',
+                failed ? `${failed} move(s) failed (${lastFailure || 'unknown error'}); check permissions and debug logs.` : '',
                 parsed.overflow ? `Only the first ${MAX_TARGETS} valid IDs are used.` : '',
             ].filter(Boolean)
 
@@ -626,6 +609,7 @@ export default plugin<{ jsonStorage: PullSettings }>({
             unsubscribeUserStore,
             unsubscribeVoiceStore,
             unsubscribeChannelStore,
+            unsubscribePermissionStore,
             unsubscribeHttpModule,
             ...commandUnsubscribers,
             () => {

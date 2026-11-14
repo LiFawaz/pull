@@ -16,7 +16,7 @@ These are local client commands, not server-registered bot commands. They do not
 
 Every push to `main` starts the **Build Pull plugin** GitHub Actions workflow. You can also start it manually from the Actions tab.
 
-When the workflow succeeds, open its run and download the `pull-1.0.4-install-zip` artifact. Install that ZIP from Valenced > Settings > Valenced > Plugins > settings gear > Install from file.
+When the workflow succeeds, open its run and download the `pull-1.0.5-install-zip` artifact. Install that ZIP from Valenced > Settings > Valenced > Plugins > settings gear > Install from file.
 
 ## Configure
 
@@ -25,6 +25,10 @@ The plugin settings still allow you to paste Discord user IDs manually. Use one 
 Join a voice channel in the server where the configured accounts are connected. Pull moves only configured accounts that are already connected to voice in that same server.
 
 When you switch voice channels, Pull checks again and moves those configured accounts to your new channel. If a configured account disconnects and later joins voice, Pull checks it again.
+
+## Voice state and diagnostics
+
+Pull reads Discord's voice-state map with its guild keys intact. The status line distinguishes accounts not in voice, accounts in another server, permission-blocked moves, and HTTP request failures.
 
 ## Permission and safety behavior
 
