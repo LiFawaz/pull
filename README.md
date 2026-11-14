@@ -1,12 +1,12 @@
 # Pull
 
-A private Valenced plugin for moving only the Discord accounts you explicitly configure into your current voice channel.
+A Valenced plugin for moving only the Discord accounts you explicitly configure into your current voice channel.
 
 ## Build on GitHub
 
 Every push to `main` starts the **Build Pull plugin** GitHub Actions workflow. You can also start it manually from the Actions tab.
 
-When the workflow succeeds, open its run and download the `pull-1.0.0-install-zip` artifact. Install that ZIP from Valenced > Settings > Valenced > Plugins > settings gear > Install from file.
+When the workflow succeeds, open its run and download the `pull-1.0.1-install-zip` artifact. Install that ZIP from Valenced > Settings > Valenced > Plugins > settings gear > Install from file.
 
 ## Configure
 

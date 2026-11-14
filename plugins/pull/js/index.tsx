@@ -124,9 +124,9 @@ export default plugin<{ jsonStorage: PullSettings }>({
         const pausedUntil = new Map<string, number>()
         let globalMoveHistory: number[] = []
 
-        const userStore: any = getStore('UserStore')
-        const voiceStore: any = getStore('VoiceStateStore')
-        const channelStore: any = getStore('ChannelStore')
+        let userStore: any = null
+        let voiceStore: any = null
+        let channelStore: any = null
         let permissionStore: any = null
         let restApi: any = null
 
@@ -231,6 +231,20 @@ export default plugin<{ jsonStorage: PullSettings }>({
                 void reconcile()
             }, 180)
         }
+
+        // getStore is callback-based: stores may not exist yet when the plugin starts.
+        const unsubscribeUserStore = getStore('UserStore', (store: any) => {
+            userStore = store
+            scheduleReconcile()
+        })
+        const unsubscribeVoiceStore = getStore('VoiceStateStore', (store: any) => {
+            voiceStore = store
+            scheduleReconcile()
+        })
+        const unsubscribeChannelStore = getStore('ChannelStore', (store: any) => {
+            channelStore = store
+            scheduleReconcile()
+        })
 
         async function reconcile() {
             if (stopped) return
@@ -499,6 +513,9 @@ export default plugin<{ jsonStorage: PullSettings }>({
         pollTimer = setInterval(scheduleReconcile, 2000)
         cleanup(
             unsubscribe,
+            unsubscribeUserStore,
+            unsubscribeVoiceStore,
+            unsubscribeChannelStore,
             () => {
                 stopped = true
                 if (reconcileTimer) clearTimeout(reconcileTimer)
