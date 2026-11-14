@@ -158,12 +158,12 @@ export default plugin<{ jsonStorage: PullSettings }>({
         }
 
         function parseCommandIds(value: unknown): { ids: string[]; error: string | null } {
-            const parts = String(value ?? '').trim().split(/[\\s,;]+/).filter(Boolean)
+            const parts = String(value ?? '').trim().split(/[\s,;]+/).filter(Boolean)
             if (!parts.length) {
                 return { ids: [], error: 'Enter at least 5 Discord user IDs.' }
             }
 
-            if (parts.some(id => !/^\\d{15,22}$/.test(id))) {
+            if (parts.some(id => !/^\d{15,22}$/.test(id))) {
                 return { ids: [], error: 'IDs must be numeric Discord user IDs, separated by spaces or commas.' }
             }
 
@@ -213,7 +213,7 @@ export default plugin<{ jsonStorage: PullSettings }>({
                         }
 
                         await jsonStorage.set({
-                            userIds: parsed.ids.join('\\n'),
+                            userIds: parsed.ids.join('\n'),
                             enabled: true,
                         })
                         status(`Pull is armed for ${parsed.ids.length} configured accounts.`)
