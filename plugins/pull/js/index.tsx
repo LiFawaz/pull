@@ -19,12 +19,17 @@ const DEFAULT_SETTINGS: PullSettings = {
 
 const MOVE_MEMBERS = 1n << 24n
 const MAX_TARGETS = 20
-const MOVE_SPACING_MS = 400
-const DUPLICATE_COOLDOWN_MS = 800
+const MOVE_SPACING_MS = 500
+const DUPLICATE_COOLDOWN_MS = 2_000
 const HISTORY_WINDOW_MS = 60_000
 const MAX_MOVES_PER_TARGET = 10
 const TARGET_PAUSE_MS = 30_000
 const MAX_MOVES_GLOBAL = 40
+const POLL_INTERVAL_MS = 2_500
+const MOVE_CONFIRMATION_TIMEOUT_MS = 12_000
+const RETRY_BASE_MS = 5_000
+const RETRY_MAX_MS = 60_000
+const RATE_LIMIT_FALLBACK_MS = 10_000
 
 function parseTargetIds(value: unknown): { ids: string[]; overflow: boolean } {
     const parts = String(value ?? '').split(/[\s,;]+/)
@@ -68,6 +73,9 @@ export default plugin<{ jsonStorage: PullSettings }>({
         const lastMoveAt = new Map<string, number>()
         const moveHistory = new Map<string, number[]>()
         const pausedUntil = new Map<string, number>()
+        const pendingMoves = new Map<string, { channelId: string; requestedAt: number }>()
+        const retryStates = new Map<string, { attempts: number; nextAttemptAt: number }>()
+        let globalRetryAt = 0
         let globalMoveHistory: number[] = []
 
         let userStore: any = null
@@ -99,6 +107,12 @@ export default plugin<{ jsonStorage: PullSettings }>({
             } catch (error) {
                 logger?.error?.('[Pull] Could not show command feedback', error)
             }
+        }
+
+        function clearRetryState() {
+            pendingMoves.clear()
+            retryStates.clear()
+            globalRetryAt = 0
         }
 
         function parseCommandIds(args: any[]): { ids: string[]; error: string | null } {
@@ -157,6 +171,7 @@ export default plugin<{ jsonStorage: PullSettings }>({
                             return
                         }
 
+                        clearRetryState()
                         await jsonStorage.set({
                             userIds: parsed.ids.join('\n'),
                             enabled: true,
@@ -177,6 +192,7 @@ export default plugin<{ jsonStorage: PullSettings }>({
                     type: 1,
                     shouldHide: () => false,
                     execute: async () => {
+                        clearRetryState()
                         await jsonStorage.set({ enabled: false })
                         status('Pull is stopped.')
                         scheduleReconcile()
@@ -200,47 +216,18 @@ export default plugin<{ jsonStorage: PullSettings }>({
             }
         }
 
-        function getVoiceInfo(userId: string): {
-            channelId: string | null
-            guildId: string | null
-            channel: any
-        } {
-            let state: any = null
-            let indexedGuildId: string | null = null
-
-            // Discord stores voice states by guild, then user ID. The state
-            // itself does not always include guildId, so keep the map key.
-            try {
-                const all = voiceStore?.getAllVoiceStates?.()
-                if (all && typeof all === 'object') {
-                    for (const [guildId, members] of Object.entries(all)) {
-                        if (!members || typeof members !== 'object') continue
-                        const candidate = (members as any)[userId]
-                        if (!candidate) continue
-
-                        state = candidate
-                        if (guildId !== '@me') indexedGuildId = String(guildId)
-                        if (indexedGuildId) break
-                    }
-                }
-            } catch (error) {
-                logger?.error?.('[Pull] All voice states lookup failed', error)
-            }
-
-            // Fallback for client builds where only the per-user accessor is available.
-            if (!state) {
-                try {
-                    state = voiceStore?.getVoiceStateForUser?.(userId) ?? null
-                } catch (error) {
-                    logger?.error?.('[Pull] Per-user voice state lookup failed', error)
-                }
-            }
-
-            if (!state) return { channelId: null, guildId: null, channel: null }
+        function makeVoiceInfo(state: any, indexedGuildId: string | null = null) {
+            if (!state) return { channelId: null, guildId: indexedGuildId, channel: null }
 
             const rawChannelId = state.channelId ?? state.channel_id
             const channelId = rawChannelId == null ? null : String(rawChannelId)
-            if (!channelId) return { channelId: null, guildId: indexedGuildId, channel: null }
+            if (!channelId) {
+                return {
+                    channelId: null,
+                    guildId: indexedGuildId ?? state.guildId ?? state.guild_id ?? null,
+                    channel: null,
+                }
+            }
 
             let channel: any = null
             try {
@@ -261,6 +248,93 @@ export default plugin<{ jsonStorage: PullSettings }>({
                 guildId: rawGuildId == null ? null : String(rawGuildId),
                 channel,
             }
+        }
+
+        function getVoiceInfo(userId: string, preferredGuildId?: string | null): {
+            channelId: string | null
+            guildId: string | null
+            channel: any
+        } {
+            // Prefer the destination server when an account has multiple voice sessions.
+            if (preferredGuildId) {
+                try {
+                    const direct =
+                        voiceStore?.getVoiceState?.(preferredGuildId, userId) ??
+                        voiceStore?.getVoiceStates?.(preferredGuildId)?.[userId] ??
+                        voiceStore?.getAllVoiceStates?.()?.[preferredGuildId]?.[userId]
+                    if (direct) return makeVoiceInfo(direct, preferredGuildId)
+                } catch (error) {
+                    logger?.error?.('[Pull] Preferred guild voice lookup failed', error)
+                }
+            }
+
+            try {
+                const all = voiceStore?.getAllVoiceStates?.()
+                if (all && typeof all === 'object') {
+                    for (const [guildId, members] of Object.entries(all)) {
+                        if (guildId === '@me' || !members || typeof members !== 'object') continue
+                        const candidate = (members as any)[userId]
+                        if (candidate) return makeVoiceInfo(candidate, String(guildId))
+                    }
+                }
+            } catch (error) {
+                logger?.error?.('[Pull] All voice states lookup failed', error)
+            }
+
+            try {
+                const state = voiceStore?.getVoiceStateForUser?.(userId) ?? null
+                if (state) return makeVoiceInfo(state)
+            } catch (error) {
+                logger?.error?.('[Pull] Per-user voice state lookup failed', error)
+            }
+
+            return { channelId: null, guildId: null, channel: null }
+        }
+
+        function getCurrentVoiceInfo(userId: string) {
+            // Prefer the current client session rather than a stale voice session.
+            try {
+                const all = voiceStore?.getAllVoiceStates?.()
+                if (all && typeof all === 'object') {
+                    for (const guildId of Object.keys(all)) {
+                        if (guildId === '@me') continue
+                        const channelId = voiceStore?.getCurrentClientVoiceChannelId?.(guildId)
+                        if (!channelId) continue
+                        return {
+                            channelId: String(channelId),
+                            guildId: String(guildId),
+                            channel: channelStore?.getChannel?.(String(channelId)) ?? null,
+                        }
+                    }
+                }
+            } catch (error) {
+                logger?.error?.('[Pull] Current client voice lookup failed', error)
+            }
+            return getVoiceInfo(userId)
+        }
+
+        function getRetryAfterMs(error: any): number {
+            const candidates = [
+                error?.body?.retry_after,
+                error?.response?.body?.retry_after,
+                error?.data?.retry_after,
+                error?.headers?.['retry-after'],
+            ]
+            for (const candidate of candidates) {
+                const seconds = Number(candidate)
+                if (Number.isFinite(seconds) && seconds > 0) {
+                    return Math.min(120_000, Math.ceil(seconds * 1000))
+                }
+            }
+            return RATE_LIMIT_FALLBACK_MS
+        }
+
+        function scheduleTargetRetry(userId: string, now: number): number {
+            const previous = retryStates.get(userId)
+            const attempts = Math.min((previous?.attempts ?? 0) + 1, 8)
+            const waitMs = Math.min(RETRY_BASE_MS * 2 ** (attempts - 1), RETRY_MAX_MS)
+            retryStates.set(userId, { attempts, nextAttemptAt: now + waitMs })
+            return waitMs
         }
 
         function canMoveBetween(sourceChannel: any, destinationChannel: any): boolean {
@@ -367,7 +441,7 @@ export default plugin<{ jsonStorage: PullSettings }>({
                 return
             }
 
-            const destinationInfo = getVoiceInfo(ownId)
+            const destinationInfo = getCurrentVoiceInfo(ownId)
             if (!destinationInfo.channelId || !destinationInfo.guildId) {
                 status('Pull is armed. Join a voice channel to start pulling your configured accounts.')
                 return
@@ -402,12 +476,13 @@ export default plugin<{ jsonStorage: PullSettings }>({
             let alreadyWithYou = 0
             let permissionBlocked = 0
             let coolingDown = 0
+            let awaitingConfirmation = 0
             const now = Date.now()
 
             for (const userId of targetIds) {
                 if (userId === ownId) continue
 
-                const target = getVoiceInfo(userId)
+                const target = getVoiceInfo(userId, destinationInfo.guildId)
                 if (!target.channelId) {
                     notInVoice++
                     continue
@@ -419,7 +494,25 @@ export default plugin<{ jsonStorage: PullSettings }>({
                 }
 
                 if (target.channelId === destinationInfo.channelId) {
+                    pendingMoves.delete(userId)
+                    retryStates.delete(userId)
                     alreadyWithYou++
+                    continue
+                }
+
+                const pending = pendingMoves.get(userId)
+                if (pending && pending.channelId !== destinationInfo.channelId) {
+                    pendingMoves.delete(userId)
+                } else if (pending && now - pending.requestedAt < MOVE_CONFIRMATION_TIMEOUT_MS) {
+                    awaitingConfirmation++
+                    continue
+                } else if (pending) {
+                    pendingMoves.delete(userId)
+                }
+
+                const retry = retryStates.get(userId)
+                if (retry && retry.nextAttemptAt > now) {
+                    coolingDown++
                     continue
                 }
 
@@ -462,7 +555,12 @@ export default plugin<{ jsonStorage: PullSettings }>({
 
             globalMoveHistory = keepRecent(globalMoveHistory, now)
             if (globalMoveHistory.length >= MAX_MOVES_GLOBAL) {
-                status('Pull is paused briefly by its safety limit (40 moves per minute).')
+                status('Pull is paused briefly by its safety limit (40 moves per minute). It will resume automatically.')
+                return
+            }
+
+            if (globalRetryAt > Date.now()) {
+                status(`Discord rate limit cooldown. Pull will retry in ${Math.ceil((globalRetryAt - Date.now()) / 1000)}s.`)
                 return
             }
 
@@ -475,13 +573,21 @@ export default plugin<{ jsonStorage: PullSettings }>({
                 if (stopped || !jsonStorage.cache?.enabled) break
 
                 // Do not keep sending moves to an old destination if you switch channels mid-queue.
-                const latestDestination = getVoiceInfo(ownId)
-                if (latestDestination.channelId !== destinationInfo.channelId) {
+                const latestDestination = getCurrentVoiceInfo(ownId)
+                if (
+                    latestDestination.channelId !== destinationInfo.channelId ||
+                    latestDestination.guildId !== destinationInfo.guildId
+                ) {
                     scheduleReconcile()
                     break
                 }
 
-                const latestTarget = getVoiceInfo(job.userId)
+                const latestTarget = getVoiceInfo(job.userId, job.guildId)
+                if (latestTarget.channelId === destinationInfo.channelId) {
+                    pendingMoves.delete(job.userId)
+                    retryStates.delete(job.userId)
+                    continue
+                }
                 if (
                     latestTarget.channelId !== job.sourceChannelId ||
                     latestTarget.guildId !== job.guildId
@@ -527,6 +633,11 @@ export default plugin<{ jsonStorage: PullSettings }>({
                     moveHistory.set(job.userId, [...userMoves, stamp])
                     globalMoveHistory.push(stamp)
                     lastMoveAt.set(job.userId, stamp)
+                    pendingMoves.set(job.userId, {
+                        channelId: destinationInfo.channelId,
+                        requestedAt: stamp,
+                    })
+                    retryStates.delete(job.userId)
                     moved++
                 } catch (error: any) {
                     failed++
@@ -534,18 +645,20 @@ export default plugin<{ jsonStorage: PullSettings }>({
                     const code = Number(error?.body?.code ?? 0)
 
                     if (statusCode === 429) {
+                        globalRetryAt = Date.now() + getRetryAfterMs(error)
                         rateLimited = true
                         logger?.warn?.('[Pull] Discord rate-limited a voice move', error)
                         break
                     }
 
+                    const retryDelay = scheduleTargetRetry(job.userId, Date.now())
                     if (statusCode === 403 || code === 50013) {
                         permissionBlocked++
                     }
 
                     lastFailure = statusCode
-                        ? `HTTP ${statusCode}${code ? ` (Discord code ${code})` : ''}`
-                        : String(error?.message ?? 'unknown request error')
+                        ? `HTTP ${statusCode}${code ? ` (Discord code ${code})` : ''}, retry in ${Math.ceil(retryDelay / 1000)}s`
+                        : `${String(error?.message ?? 'unknown request error')}, retry in ${Math.ceil(retryDelay / 1000)}s`
                     logger?.error?.('[Pull] Could not move configured account', {
                         userId: job.userId,
                         guildId: job.guildId,
@@ -561,13 +674,14 @@ export default plugin<{ jsonStorage: PullSettings }>({
             }
 
             if (rateLimited) {
-                status('Discord rate-limited Pull. It will check again after Discord updates voice state.')
+                status(`Discord rate-limited Pull. Retrying in ${Math.ceil(Math.max(0, globalRetryAt - Date.now()) / 1000)}s.`)
                 return
             }
 
             if (jobs.length === 0 && moved === 0 && failed === 0) {
                 const parts = [
                     `Watching ${targetIds.length} configured account(s).`,
+                    awaitingConfirmation ? `${awaitingConfirmation} waiting for Discord voice-state confirmation` : '',
                     notInVoice ? `${notInVoice} not in voice` : '',
                     otherServer ? `${otherServer} in another server` : '',
                     alreadyWithYou ? `${alreadyWithYou} already with you` : '',
@@ -603,7 +717,7 @@ export default plugin<{ jsonStorage: PullSettings }>({
             return payload
         })
 
-        pollTimer = setInterval(scheduleReconcile, 2000)
+        pollTimer = setInterval(scheduleReconcile, POLL_INTERVAL_MS)
         cleanup(
             unsubscribe,
             unsubscribeUserStore,
@@ -619,6 +733,7 @@ export default plugin<{ jsonStorage: PullSettings }>({
                 moving.clear()
                 moveHistory.clear()
                 pausedUntil.clear()
+                clearRetryState()
                 globalMoveHistory = []
             },
         )
@@ -661,6 +776,7 @@ export default plugin<{ jsonStorage: PullSettings }>({
         }
 
         const startPull = () => {
+            clearRetryState()
             void api.jsonStorage.set({
                 userIds: draft.trim(),
                 enabled: true,
@@ -668,6 +784,7 @@ export default plugin<{ jsonStorage: PullSettings }>({
         }
 
         const stopPull = () => {
+            clearRetryState()
             void api.jsonStorage.set({ enabled: false, status: 'Pull is stopped.' })
         }
 
@@ -734,9 +851,9 @@ export default plugin<{ jsonStorage: PullSettings }>({
                     </Text>
 
                     <Text style={{ color: mutedColor, fontSize: 12, marginTop: 8 }}>
-                        Pull only acts on IDs you enter. It checks Move Members in the source and destination channels,
-                        plus Connect in your destination channel. It does not bypass Discord permissions. Moves may
-                        appear in the server audit log.
+                        Pull only acts on IDs you enter and only within the same server. It checks Move Members in
+                        the source and destination channels. It confirms each move through Discord voice state and
+                        retries temporary failures automatically until you turn it off.
                     </Text>
                 </View>
             </ScrollView>
