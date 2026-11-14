@@ -160,7 +160,7 @@ export default plugin<{ jsonStorage: PullSettings }>({
         function parseCommandIds(value: unknown): { ids: string[]; error: string | null } {
             const parts = String(value ?? '').trim().split(/[\s,;]+/).filter(Boolean)
             if (!parts.length) {
-                return { ids: [], error: 'Enter at least 5 Discord user IDs.' }
+                return { ids: [], error: 'Enter at least one Discord user ID.' }
             }
 
             if (parts.some(id => !/^\d{15,22}$/.test(id))) {
@@ -168,9 +168,6 @@ export default plugin<{ jsonStorage: PullSettings }>({
             }
 
             const ids = [...new Set(parts)]
-            if (ids.length < 5) {
-                return { ids: [], error: 'You must enter at least 5 different user IDs.' }
-            }
             if (ids.length > MAX_TARGETS) {
                 return { ids: [], error: `You can enter up to ${MAX_TARGETS} user IDs.` }
             }
@@ -188,8 +185,8 @@ export default plugin<{ jsonStorage: PullSettings }>({
                 commandUnsubscribers.push(commandRegistry.registerCommand({
                     name: 'pull',
                     displayName: 'pull',
-                    description: 'Move 5 to 20 of your alt accounts into your current voice channel',
-                    displayDescription: 'Move 5 or more of your alt accounts into your current voice channel',
+                    description: 'Move 1 to 20 of your alt accounts into your current voice channel',
+                    displayDescription: 'Move 1 to 20 of your alt accounts into your current voice channel',
                     applicationId: '-1',
                     inputType: 1,
                     type: 1,
@@ -198,8 +195,8 @@ export default plugin<{ jsonStorage: PullSettings }>({
                         {
                             name: 'ids',
                             displayName: 'ids',
-                            description: 'Enter 5–20 Discord user IDs separated by spaces or commas',
-                            displayDescription: 'Enter 5–20 Discord user IDs separated by spaces or commas',
+                            description: 'Enter 1–20 Discord user IDs separated by spaces or commas',
+                            displayDescription: 'Enter 1–20 Discord user IDs separated by spaces or commas',
                             type: 3,
                             required: true,
                         },
