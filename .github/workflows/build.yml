@@ -1,12 +1,15 @@
-name: Build Pull plugin
+name: Build and publish Pull plugin
 
 on:
   push:
     branches: [main]
+    paths-ignore:
+      - "index.json"
+      - "pool/**"
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   build:
@@ -14,6 +17,8 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
+        with:
+          persist-credentials: true
 
       - name: Set up Bun
         uses: oven-sh/setup-bun@v2
@@ -34,6 +39,17 @@ jobs:
 
       - name: Verify installable ZIP
         run: python scripts/check_zip.py pull
+
+      - name: Publish repository index and ZIP
+        run: |
+          python scripts/publish_index.py pull
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add index.json pool/
+          if ! git diff --cached --quiet; then
+            git commit -m "Publish Pull 1.0.0 [skip ci]"
+            git push
+          fi
 
       - name: Upload installable ZIP
         uses: actions/upload-artifact@v4
