@@ -629,7 +629,7 @@ export default plugin<{ jsonStorage: PullSettings }>({
                     const errorMessage = String(errorBody?.message ?? error?.message ?? '').toLowerCase()
 
                     if (statusCode === 429) {
-                        globalRetryAt = Date.now() + getRetryAfterMs(error)
+                        globalRetryAt = Date.now() + getRetryAfterMs(error, RATE_LIMIT_FALLBACK_MS)
                         rateLimited = true
                         logger?.warn?.('[Pull] Discord rate-limited a voice move', error)
                         break
