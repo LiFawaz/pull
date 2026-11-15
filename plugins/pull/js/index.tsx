@@ -13,6 +13,8 @@ import {
     getVoiceChannelCapacity,
     isCapacityError,
     parseTargetIds,
+    getReconcileDelayMs,
+    prioritizeWaitingTargets,
 } from './helpers'
 
 interface PullSettings {
@@ -36,7 +38,7 @@ const HISTORY_WINDOW_MS = 60_000
 const MAX_MOVES_PER_TARGET = 10
 const TARGET_PAUSE_MS = 30_000
 const MAX_MOVES_GLOBAL = 40
-const POLL_INTERVAL_MS = 500
+const POLL_INTERVAL_MS = 250
 const MOVE_CONFIRMATION_TIMEOUT_MS = 8_000
 const RETRY_BASE_MS = 5_000
 const RETRY_MAX_MS = 60_000
@@ -336,13 +338,24 @@ export default plugin<{ jsonStorage: PullSettings }>({
             return stamps.filter(at => now - at < HISTORY_WINDOW_MS)
         }
 
-        function scheduleReconcile() {
+        let reconcileScheduledImmediate = false
+
+        function scheduleReconcile(immediate = false) {
             if (stopped) return
-            if (reconcileTimer) clearTimeout(reconcileTimer)
+
+            // An immediate voice-state event supersedes a pending fallback timer.
+            // Repeated events do not keep postponing an already scheduled run.
+            if (reconcileTimer) {
+                if (!immediate || reconcileScheduledImmediate) return
+                clearTimeout(reconcileTimer)
+            }
+
+            reconcileScheduledImmediate = immediate
             reconcileTimer = setTimeout(() => {
                 reconcileTimer = null
+                reconcileScheduledImmediate = false
                 void reconcile()
-            }, 180)
+            }, getReconcileDelayMs(immediate))
         }
 
         // getStore is callback-based: stores may not exist yet when the plugin starts.
@@ -394,7 +407,7 @@ export default plugin<{ jsonStorage: PullSettings }>({
                 reconciling = false
                 if (reconcileAgain) {
                     reconcileAgain = false
-                    scheduleReconcile()
+                    scheduleReconcile(true)
                 }
             }
         }
@@ -457,17 +470,33 @@ export default plugin<{ jsonStorage: PullSettings }>({
             let awaitingConfirmation = 0
             let waitingForCapacity = 0
             const now = Date.now()
+            const configuredTargets = new Set(targetIds)
 
-            for (const userId of targetIds) {
+            // Remove reservations for targets that were removed or whose confirmation timed out.
+            for (const [userId, pending] of pendingMoves.entries()) {
+                if (
+                    !configuredTargets.has(userId) ||
+                    now - pending.requestedAt >= MOVE_CONFIRMATION_TIMEOUT_MS
+                ) {
+                    pendingMoves.delete(userId)
+                }
+            }
+
+            // Accounts already waiting for capacity get first chance at the next slot.
+            const orderedTargetIds = prioritizeWaitingTargets(targetIds, fullChannelWait)
+
+            for (const userId of orderedTargetIds) {
                 if (userId === ownId) continue
 
                 const target = getVoiceInfo(userId, destinationInfo.guildId)
                 if (!target.channelId) {
+                    pendingMoves.delete(userId)
                     notInVoice++
                     continue
                 }
 
                 if (!target.guildId || target.guildId !== destinationInfo.guildId) {
+                    pendingMoves.delete(userId)
                     otherServer++
                     continue
                 }
@@ -738,12 +767,12 @@ export default plugin<{ jsonStorage: PullSettings }>({
                 type.includes('GUILD_ROLE_UPDATE') ||
                 type.includes('GUILD_MEMBER_UPDATE')
             ) {
-                scheduleReconcile()
+                scheduleReconcile(true)
             }
             return payload
         })
 
-        pollTimer = setInterval(scheduleReconcile, POLL_INTERVAL_MS)
+        pollTimer = setInterval(() => scheduleReconcile(true), POLL_INTERVAL_MS)
         cleanup(
             unsubscribe,
             unsubscribeUserStore,
@@ -756,6 +785,7 @@ export default plugin<{ jsonStorage: PullSettings }>({
                 stopped = true
                 if (activeResetRuntimeState === clearRetryState) activeResetRuntimeState = null
                 if (reconcileTimer) clearTimeout(reconcileTimer)
+                reconcileScheduledImmediate = false
                 if (pollTimer) clearInterval(pollTimer)
                 moving.clear()
                 moveHistory.clear()
