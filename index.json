@@ -5,16 +5,16 @@
   "plugins": {
     "com.lifawaz.pull": {
       "name": "Pull",
-      "description": "Move your configured alt accounts into your current voice channel, with /pull and /unpull commands.",
+      "description": "Fast continuous voice checks with full-channel permission awareness and safe retries.",
       "author": "Li Fawaz (https://github.com/LiFawaz)",
       "channels": {
-        "latest": "1.0.6"
+        "latest": "1.0.7"
       },
       "versions": {
-        "1.0.6": {
-          "url": "https://raw.githubusercontent.com/LiFawaz/pull/main/pool/com.lifawaz.pull%401.0.6.zip",
-          "sha256": "8c21bad76a003bf5140334103968c01711ea47fcd6b781bebfe55a1904338491",
-          "size": 5388,
+        "1.0.7": {
+          "url": "https://raw.githubusercontent.com/LiFawaz/pull/main/pool/com.lifawaz.pull%401.0.7.zip",
+          "sha256": "1a2c3866c6ddb7fdbd9c4b21c85dd578fe904797c14b6ad812061c6065340e14",
+          "size": 6039,
           "dependencies": {
             "valenced.api": {
               "version": ">=1 <2"
