@@ -13,7 +13,7 @@
       "versions": {
         "1.0.12": {
           "url": "https://raw.githubusercontent.com/LiFawaz/pull/main/pool/com.lifawaz.pull%401.0.12.zip",
-          "sha256": "6a2dc289fcdd2d8549c56428a20fdead40d3a428325a217e472535b256839404",
+          "sha256": "e8f2e3ff02ae185cc041fa6e5d50ff071a2b61d59b218b5dd3add3e7d28b4228",
           "size": 6235,
           "dependencies": {
             "valenced.api": {
