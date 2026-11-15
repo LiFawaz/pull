@@ -20,14 +20,14 @@ const DEFAULT_SETTINGS: PullSettings = {
 const MOVE_MEMBERS = 1n << 24n
 const CONNECT = 1n << 20n
 const MAX_TARGETS = 20
-const MOVE_SPACING_MS = 350
+const MOVE_SPACING_MS = 250
 const DUPLICATE_COOLDOWN_MS = 2_000
 const HISTORY_WINDOW_MS = 60_000
 const MAX_MOVES_PER_TARGET = 10
 const TARGET_PAUSE_MS = 30_000
 const MAX_MOVES_GLOBAL = 40
-const POLL_INTERVAL_MS = 750
-const MOVE_CONFIRMATION_TIMEOUT_MS = 3_500
+const POLL_INTERVAL_MS = 500
+const MOVE_CONFIRMATION_TIMEOUT_MS = 8_000
 const RETRY_BASE_MS = 5_000
 const RETRY_MAX_MS = 60_000
 const RATE_LIMIT_FALLBACK_MS = 10_000
@@ -76,6 +76,7 @@ export default plugin<{ jsonStorage: PullSettings }>({
         const pausedUntil = new Map<string, number>()
         const pendingMoves = new Map<string, { channelId: string; requestedAt: number }>()
         const retryStates = new Map<string, { attempts: number; nextAttemptAt: number }>()
+        const fullChannelWait = new Set<string>()
         let globalRetryAt = 0
         let globalMoveHistory: number[] = []
 
@@ -113,6 +114,7 @@ export default plugin<{ jsonStorage: PullSettings }>({
         function clearRetryState() {
             pendingMoves.clear()
             retryStates.clear()
+            fullChannelWait.clear()
             globalRetryAt = 0
         }
 
@@ -315,7 +317,7 @@ export default plugin<{ jsonStorage: PullSettings }>({
         }
 
         function getResponseBody(response: any): any {
-            let body = response?.body ?? response?.data ?? response
+            let body = response?.body ?? response?.data ?? response?.response?.body ?? response?.response?.data ?? response
             if (typeof body === 'string') {
                 try {
                     body = JSON.parse(body)
@@ -385,8 +387,7 @@ export default plugin<{ jsonStorage: PullSettings }>({
                 // channel, so CONNECT is not an additional requirement here.
                 return (
                     permissionStore.can(MOVE_MEMBERS, sourceChannel) === true &&
-                    permissionStore.can(MOVE_MEMBERS, destinationChannel) === true &&
-                    permissionStore.can(CONNECT, destinationChannel) === true
+                    permissionStore.can(MOVE_MEMBERS, destinationChannel) === true
                 )
             } catch (error) {
                 logger?.error?.('[Pull] Permission check failed', error)
@@ -517,6 +518,7 @@ export default plugin<{ jsonStorage: PullSettings }>({
             let permissionBlocked = 0
             let coolingDown = 0
             let awaitingConfirmation = 0
+            let waitingForCapacity = 0
             const now = Date.now()
 
             for (const userId of targetIds) {
@@ -548,6 +550,16 @@ export default plugin<{ jsonStorage: PullSettings }>({
                     continue
                 } else if (pending) {
                     pendingMoves.delete(userId)
+                }
+
+                const capacity = getVoiceChannelCapacity(destinationChannel, destinationInfo.guildId, destinationInfo.channelId)
+                if (fullChannelWait.has(userId)) {
+                    if (capacity?.isFull) {
+                        waitingForCapacity++
+                        continue
+                    }
+                    fullChannelWait.delete(userId)
+                    retryStates.delete(userId)
                 }
 
                 const retry = retryStates.get(userId)
@@ -693,10 +705,16 @@ export default plugin<{ jsonStorage: PullSettings }>({
                         break
                     }
 
-                    if (/channel is full|voice channel is full|user limit|channel user limit/.test(errorMessage)) {
-                        const retryAt = Date.now() + 1_500
-                        retryStates.set(job.userId, { attempts: 1, nextAttemptAt: retryAt })
-                        lastFailure = 'destination voice channel is full; retrying when the next check runs'
+                    if (/channel is full|voice channel is full|user.?limit|maximum.{0,30}(user|member)|capacity|too many.{0,20}(user|member)/i.test(errorMessage)) {
+                        const capacity = getVoiceChannelCapacity(destinationChannel, job.guildId, destinationInfo.channelId)
+                        retryStates.delete(job.userId)
+                        if (capacity?.isFull) {
+                            fullChannelWait.add(job.userId)
+                            lastFailure = 'destination voice channel is full; waiting for a free slot'
+                        } else {
+                            retryStates.set(job.userId, { attempts: 1, nextAttemptAt: Date.now() + 1_500 })
+                            lastFailure = 'destination voice channel rejected the move; checking again shortly'
+                        }
                         continue
                     }
 
@@ -734,6 +752,7 @@ export default plugin<{ jsonStorage: PullSettings }>({
                     `Watching ${targetIds.length} configured account(s).`,
                     capacity ? `VC occupancy: ${capacity.occupancy}/${capacity.limit}${capacity.isFull ? ' (full; Move Members override applies)' : ''}.` : '',
                     awaitingConfirmation ? `${awaitingConfirmation} waiting for Discord voice-state confirmation` : '',
+                    waitingForCapacity ? `${waitingForCapacity} waiting for a free voice slot` : '',
                     notInVoice ? `${notInVoice} not in voice` : '',
                     otherServer ? `${otherServer} in another server` : '',
                     alreadyWithYou ? `${alreadyWithYou} already with you` : '',
