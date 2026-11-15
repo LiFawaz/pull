@@ -80,6 +80,20 @@ describe('Pull helper logic', () => {
         expect(checkCapacityWait(waiting, '234567890123456', null)).toBe('not-waiting')
     })
 
+    test('does not pre-block an untried target solely because the channel is full', () => {
+        const waiting = new Set<string>()
+        const fullCapacity = {
+            occupancy: 2,
+            reserved: 0,
+            limit: 2,
+            available: 0,
+            isFull: true,
+        }
+
+        // A first attempt must reach Discord so it can evaluate target overrides.
+        expect(checkCapacityWait(waiting, '123456789012345', fullCapacity)).toBe('not-waiting')
+    })
+
     test('recognizes capacity errors without classifying permission failures as capacity', () => {
         expect(isCapacityError('Voice channel is full')).toBe(true)
         expect(isCapacityError('The user limit has been reached')).toBe(true)
