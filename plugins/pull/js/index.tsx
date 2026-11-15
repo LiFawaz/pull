@@ -491,8 +491,11 @@ export default plugin<{ jsonStorage: PullSettings }>({
 
                 const capacity = getDestinationCapacity(destinationChannel, destinationInfo.guildId, destinationInfo.channelId)
                 const capacityWait = checkCapacityWait(fullChannelWait, userId, capacity)
-                if (capacity?.isFull || capacityWait === 'waiting') {
-                    fullChannelWait.add(userId)
+                // Do not pre-block a new target just because the channel looks full.
+                // Discord must evaluate that target's effective Connect/user-limit access
+                // (for example, an Administrator override). Only targets rejected for
+                // capacity are put into fullChannelWait.
+                if (capacityWait === 'waiting') {
                     waitingForCapacity++
                     continue
                 }
@@ -594,8 +597,9 @@ export default plugin<{ jsonStorage: PullSettings }>({
 
                 const latestCapacity = getDestinationCapacity(destinationChannel, job.guildId, destinationInfo.channelId)
                 const capacityWait = checkCapacityWait(fullChannelWait, job.userId, latestCapacity)
-                if (latestCapacity?.isFull || capacityWait === 'waiting') {
-                    fullChannelWait.add(job.userId)
+                // Re-check only users Discord previously rejected for capacity.
+                // A full snapshot alone cannot tell us whether this target has an override.
+                if (capacityWait === 'waiting') {
                     waitingForCapacity++
                     continue
                 }
