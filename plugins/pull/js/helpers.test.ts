@@ -10,6 +10,8 @@ import {
     getVoiceChannelCapacity,
     isCapacityError,
     parseTargetIds,
+    prioritizeWaitingTargets,
+    getReconcileDelayMs,
 } from './helpers'
 
 describe('Pull helper logic', () => {
@@ -124,5 +126,28 @@ describe('Pull helper logic', () => {
             { enabled: false, status: 'Pull is stopped.' },
         ])
         expect(resets).toBe(2)
+    })
+})
+
+describe('Pull fast retry scheduling', () => {
+    test('voice events schedule on the next event-loop turn', () => {
+        expect(getReconcileDelayMs(true)).toBe(0)
+    })
+
+    test('poll fallback remains bounded and validated', () => {
+        expect(getReconcileDelayMs(false, 250)).toBe(250)
+        expect(getReconcileDelayMs(false, -1)).toBe(0)
+        expect(getReconcileDelayMs(false, Number.NaN)).toBe(180)
+    })
+
+    test('capacity-waiting users are checked before new users', () => {
+        const ids = ['fresh-a', 'waiting-a', 'fresh-b', 'waiting-b']
+        const waiting = new Set(['waiting-a', 'waiting-b'])
+        expect(prioritizeWaitingTargets(ids, waiting)).toEqual([
+            'waiting-a',
+            'waiting-b',
+            'fresh-a',
+            'fresh-b',
+        ])
     })
 })
