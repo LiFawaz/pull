@@ -59,7 +59,14 @@ describe('Pull helper logic', () => {
             'vc-a',
         )
         expect(cap).toEqual({ occupancy: 2, reserved: 0, limit: 2, available: 0, isFull: true })
-        expect(getVoiceChannelCapacity({ user_limit: 0 }, {}, 'vc-a')).toBeNull()\n        expect(getVoiceChannelCapacity({}, {}, 'vc-a')).toBeNull()\n        expect(getVoiceChannelCapacity(\n            { userLimit: 3 },\n            { one: { channelId: 'vc-a' } },\n            'vc-a',\n            2,\n        )).toEqual({ occupancy: 1, reserved: 2, limit: 3, available: 0, isFull: true })
+        expect(getVoiceChannelCapacity({ user_limit: 0 }, {}, 'vc-a')).toBeNull()
+        expect(getVoiceChannelCapacity({}, {}, 'vc-a')).toBeNull()
+        expect(getVoiceChannelCapacity(
+            { userLimit: 3 },
+            { one: { channelId: 'vc-a' } },
+            'vc-a',
+            2,
+        )).toEqual({ occupancy: 1, reserved: 2, limit: 3, available: 0, isFull: true })
         expect(getVoiceChannelCapacity({ userLimit: 3 }, new Map([['x', { channelId: 'vc-a' }]]), 'vc-a'))
             .toEqual({ occupancy: 1, reserved: 0, limit: 3, available: 2, isFull: false })
     })
