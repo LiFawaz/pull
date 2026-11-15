@@ -3,7 +3,8 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "valenced-plugin build"
+    "build": "valenced-plugin build",
+    "test": "bun test plugins/pull/js/helpers.test.ts"
   },
   "dependencies": {
     "@valenced/plugin-cli": "git+https://github.com/Valenced/valenced-plugin-cli.git",
