@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { calculateVoiceCapacity } from '../plugins/pull/js/voice-capacity'
+import { calculateVoiceCapacity, hasRequiredMovePermissions } from '../plugins/pull/js/voice-capacity'
 
 describe('Pull voice-channel capacity', () => {
     test('treats a zero user limit as unlimited', () => {
@@ -55,5 +55,14 @@ describe('Pull voice-channel capacity', () => {
             available: 2,
             isFull: false,
         })
+    })
+})
+
+describe('Pull voice move permissions', () => {
+    test('requires Move Members in the source and Connect in the destination', () => {
+        expect(hasRequiredMovePermissions(true, true)).toBe(true)
+        expect(hasRequiredMovePermissions(false, true)).toBe(false)
+        expect(hasRequiredMovePermissions(true, false)).toBe(false)
+        expect(hasRequiredMovePermissions(undefined, true)).toBe(false)
     })
 })
