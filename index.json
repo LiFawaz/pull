@@ -5,16 +5,16 @@
   "plugins": {
     "com.lifawaz.pull": {
       "name": "Pull",
-      "description": "Fast continuous voice checks, full-channel capacity diagnostics, and permission-aware retries.",
+      "description": "Capacity-aware voice moves with pending-slot reservations and permission checks.",
       "author": "Li Fawaz (https://github.com/LiFawaz)",
       "channels": {
-        "latest": "1.0.10"
+        "latest": "1.0.11"
       },
       "versions": {
-        "1.0.10": {
-          "url": "https://raw.githubusercontent.com/LiFawaz/pull/main/pool/com.lifawaz.pull%401.0.10.zip",
-          "sha256": "8bc806b7d2f4519edc434734e563ed131dac3c1328ce91d0a6de67a9941ba8a7",
-          "size": 6264,
+        "1.0.11": {
+          "url": "https://raw.githubusercontent.com/LiFawaz/pull/main/pool/com.lifawaz.pull%401.0.11.zip",
+          "sha256": "c5fcbb1e6cd84682b1e509bbcf75cd92d275a6dc633b60c1c7b13eaf8049908f",
+          "size": 6254,
           "dependencies": {
             "valenced.api": {
               "version": ">=1 <2"
