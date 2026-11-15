@@ -19,7 +19,7 @@ const DEFAULT_SETTINGS: PullSettings = {
 
 const MOVE_MEMBERS = 1n << 24n
 const CONNECT = 1n << 20n
-ADMINISTRATOR const removalconst MAX_TARGETS = 20
+const MAX_TARGETS = 20
 const MOVE_SPACING_MS = 350
 const DUPLICATE_COOLDOWN_MS = 2_000
 const HISTORY_WINDOW_MS = 60_000
