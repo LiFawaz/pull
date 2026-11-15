@@ -4,6 +4,16 @@ import { Pressable, ScrollView, Text, TextInput, View } from 'react-native'
 import { getStore, onAnyFluxEventDispatched } from '@valenced/discord/flux'
 import { getModules } from '@valenced/modules/finders'
 import { withProps } from '@valenced/modules/finders/filters'
+import {
+    canMoveBetween,
+    checkCapacityWait,
+    createSettingsActions,
+    getResponseBody,
+    getRetryAfterMs,
+    getVoiceChannelCapacity,
+    isCapacityError,
+    parseTargetIds,
+} from './helpers'
 
 interface PullSettings {
     userIds: string
@@ -17,7 +27,8 @@ const DEFAULT_SETTINGS: PullSettings = {
     status: 'Pull is stopped.',
 }
 
-const MOVE_MEMBERS = 1n << 24n
+let activeResetRuntimeState: (() => void) | null = null
+
 const MAX_TARGETS = 20
 const MOVE_SPACING_MS = 250
 const DUPLICATE_COOLDOWN_MS = 2_000
@@ -30,24 +41,6 @@ const MOVE_CONFIRMATION_TIMEOUT_MS = 8_000
 const RETRY_BASE_MS = 5_000
 const RETRY_MAX_MS = 60_000
 const RATE_LIMIT_FALLBACK_MS = 10_000
-
-function parseTargetIds(value: unknown): { ids: string[]; overflow: boolean } {
-    const parts = String(value ?? '').split(/[\s,;]+/)
-    const ids: string[] = []
-    const seen = new Set<string>()
-
-    for (const part of parts) {
-        const id = part.trim()
-        if (!/^\d{15,22}$/.test(id) || seen.has(id)) continue
-        seen.add(id)
-        ids.push(id)
-    }
-
-    return {
-        ids: ids.slice(0, MAX_TARGETS),
-        overflow: ids.length > MAX_TARGETS,
-    }
-}
 
 function delay(ms: number): Promise<void> {
     return new Promise(resolve => setTimeout(resolve, ms))
@@ -116,6 +109,7 @@ export default plugin<{ jsonStorage: PullSettings }>({
             fullChannelWait.clear()
             globalRetryAt = 0
         }
+        activeResetRuntimeState = clearRetryState
 
         function parseCommandIds(args: any[]): { ids: string[]; error: string | null } {
             const values = (Array.isArray(args) ? args : [])
@@ -315,58 +309,14 @@ export default plugin<{ jsonStorage: PullSettings }>({
             return getVoiceInfo(userId)
         }
 
-        function getResponseBody(response: any): any {
-            let body = response?.body ?? response?.data ?? response?.response?.body ?? response?.response?.data ?? response
-            if (typeof body === 'string') {
-                try {
-                    body = JSON.parse(body)
-                } catch {
-                    return null
-                }
-            }
-            return body
-        }
-
-        function getVoiceChannelCapacity(channel: any, guildId: string, channelId: string): {
-            occupancy: number
-            limit: number
-            isFull: boolean
-        } | null {
-            const limit = Number(channel?.userLimit ?? channel?.user_limit ?? 0)
-            if (!Number.isFinite(limit) || limit <= 0) return null
-
+        function getDestinationCapacity(channel: any, guildId: string, channelId: string) {
             try {
                 const all = voiceStore?.getAllVoiceStates?.()
-                const members = all?.[guildId]
-                if (!members || typeof members !== 'object') return null
-
-                let occupancy = 0
-                for (const state of Object.values(members)) {
-                    if (makeVoiceInfo(state, guildId).channelId === channelId) occupancy++
-                }
-
-                return { occupancy, limit, isFull: occupancy >= limit }
+                return getVoiceChannelCapacity(channel, all?.[guildId], channelId)
             } catch (error) {
-                logger?.error?.('[Pull] Could not count voice channel members', error)
+                logger?.error?.('[Pull] Could not inspect voice channel capacity', error)
                 return null
             }
-        }
-
-        function getRetryAfterMs(error: any): number {
-            const candidates = [
-                error?.body?.retry_after,
-                error?.response?.body?.retry_after,
-                error?.data?.retry_after,
-                error?.headers?.['retry-after'],
-                error?.response?.headers?.['retry-after'],
-            ]
-            for (const candidate of candidates) {
-                const seconds = Number(candidate)
-                if (Number.isFinite(seconds) && seconds > 0) {
-                    return Math.min(120_000, Math.ceil(seconds * 1000))
-                }
-            }
-            return RATE_LIMIT_FALLBACK_MS
         }
 
         function scheduleTargetRetry(userId: string, now: number, baseMs = RETRY_BASE_MS): number {
@@ -375,23 +325,6 @@ export default plugin<{ jsonStorage: PullSettings }>({
             const waitMs = Math.min(baseMs * 2 ** (attempts - 1), RETRY_MAX_MS)
             retryStates.set(userId, { attempts, nextAttemptAt: now + waitMs })
             return waitMs
-        }
-
-        function canMoveBetween(sourceChannel: any, destinationChannel: any): boolean {
-            if (!permissionStore || typeof permissionStore.can !== 'function') return false
-            if (!sourceChannel || !destinationChannel) return false
-
-            try {
-                // The current user is already connected to the destination voice
-                // channel, so CONNECT is not an additional requirement here.
-                return (
-                    permissionStore.can(MOVE_MEMBERS, sourceChannel) === true &&
-                    permissionStore.can(MOVE_MEMBERS, destinationChannel) === true
-                )
-            } catch (error) {
-                logger?.error?.('[Pull] Permission check failed', error)
-                return false
-            }
         }
 
         function keepRecent(stamps: number[], now: number): number[] {
@@ -468,7 +401,7 @@ export default plugin<{ jsonStorage: PullSettings }>({
                 return
             }
 
-            const parsed = parseTargetIds(settings.userIds)
+            const parsed = parseTargetIds(settings.userIds, MAX_TARGETS)
             const targetIds = parsed.ids
             if (!targetIds.length) {
                 status('Add at least one valid Discord user ID, then start Pull.')
@@ -551,15 +484,13 @@ export default plugin<{ jsonStorage: PullSettings }>({
                     pendingMoves.delete(userId)
                 }
 
-                const capacity = getVoiceChannelCapacity(destinationChannel, destinationInfo.guildId, destinationInfo.channelId)
-                if (fullChannelWait.has(userId)) {
-                    if (capacity?.isFull) {
-                        waitingForCapacity++
-                        continue
-                    }
-                    fullChannelWait.delete(userId)
-                    retryStates.delete(userId)
+                const capacity = getDestinationCapacity(destinationChannel, destinationInfo.guildId, destinationInfo.channelId)
+                const capacityWait = checkCapacityWait(fullChannelWait, userId, capacity)
+                if (capacityWait === 'waiting') {
+                    waitingForCapacity++
+                    continue
                 }
+                if (capacityWait === 'released') retryStates.delete(userId)
 
                 const retry = retryStates.get(userId)
                 if (retry && retry.nextAttemptAt > now) {
@@ -704,7 +635,7 @@ export default plugin<{ jsonStorage: PullSettings }>({
                         break
                     }
 
-                    if (/channel is full|voice channel is full|user.?limit|maximum.{0,30}(user|member)|capacity|too many.{0,20}(user|member)/i.test(errorMessage)) {
+                    if (isCapacityError(errorMessage)) {
                         const capacity = getVoiceChannelCapacity(destinationChannel, job.guildId, destinationInfo.channelId)
                         retryStates.delete(job.userId)
                         if (capacity?.isFull) {
@@ -749,7 +680,7 @@ export default plugin<{ jsonStorage: PullSettings }>({
                 const capacity = getVoiceChannelCapacity(destinationChannel, destinationInfo.guildId, destinationInfo.channelId)
                 const parts = [
                     `Watching ${targetIds.length} configured account(s).`,
-                    capacity ? `VC occupancy: ${capacity.occupancy}/${capacity.limit}${capacity.isFull ? ' (full; Move Members override applies)' : ''}.` : '',
+                    capacity ? `VC occupancy: ${capacity.occupancy}/${capacity.limit}${capacity.isFull ? ' (full)' : ''}.` : '',
                     awaitingConfirmation ? `${awaitingConfirmation} waiting for Discord voice-state confirmation` : '',
                     waitingForCapacity ? `${waitingForCapacity} waiting for a free voice slot` : '',
                     notInVoice ? `${notInVoice} not in voice` : '',
@@ -798,6 +729,7 @@ export default plugin<{ jsonStorage: PullSettings }>({
             ...commandUnsubscribers,
             () => {
                 stopped = true
+                if (activeResetRuntimeState === clearRetryState) activeResetRuntimeState = null
                 if (reconcileTimer) clearTimeout(reconcileTimer)
                 if (pollTimer) clearInterval(pollTimer)
                 moving.clear()
@@ -841,21 +773,18 @@ export default plugin<{ jsonStorage: PullSettings }>({
         const textColor = '#F2F3F5'
         const mutedColor = '#B5BAC1'
 
+        const settingsActions = createSettingsActions(api.jsonStorage, () => activeResetRuntimeState?.())
+
         const saveTargets = () => {
-            void api.jsonStorage.set({ userIds: draft.trim() })
+            void settingsActions.saveTargets(draft)
         }
 
         const startPull = () => {
-            clearRetryState()
-            void api.jsonStorage.set({
-                userIds: draft.trim(),
-                enabled: true,
-            })
+            void settingsActions.startPull(draft)
         }
 
         const stopPull = () => {
-            clearRetryState()
-            void api.jsonStorage.set({ enabled: false, status: 'Pull is stopped.' })
+            void settingsActions.stopPull()
         }
 
         return (
