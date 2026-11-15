@@ -4,6 +4,7 @@ import {
     MOVE_MEMBERS,
     canMoveBetween,
     checkCapacityWait,
+    capacityWaitKey,
     createSettingsActions,
     getResponseBody,
     getRetryAfterMs,
@@ -140,14 +141,23 @@ describe('Pull fast retry scheduling', () => {
         expect(getReconcileDelayMs(false, Number.NaN)).toBe(180)
     })
 
-    test('capacity-waiting users are checked before new users', () => {
+    test('capacity-waiting users are checked before new users for the same destination', () => {
         const ids = ['fresh-a', 'waiting-a', 'fresh-b', 'waiting-b']
-        const waiting = new Set(['waiting-a', 'waiting-b'])
-        expect(prioritizeWaitingTargets(ids, waiting)).toEqual([
+        const waiting = new Set([
+            capacityWaitKey('waiting-a', 'voice-a'),
+            capacityWaitKey('waiting-b', 'voice-a'),
+        ])
+        expect(prioritizeWaitingTargets(ids, waiting, 'voice-a')).toEqual([
             'waiting-a',
             'waiting-b',
             'fresh-a',
             'fresh-b',
         ])
+    })
+
+    test('capacity waits from another destination do not block new attempts', () => {
+        const ids = ['alt-a', 'alt-b']
+        const waiting = new Set([capacityWaitKey('alt-a', 'voice-a')])
+        expect(prioritizeWaitingTargets(ids, waiting, 'voice-b')).toEqual(ids)
     })
 })
