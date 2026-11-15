@@ -18,15 +18,16 @@ const DEFAULT_SETTINGS: PullSettings = {
 }
 
 const MOVE_MEMBERS = 1n << 24n
+const ADMINISTRATOR = 1n << 3n
 const MAX_TARGETS = 20
-const MOVE_SPACING_MS = 500
+const MOVE_SPACING_MS = 350
 const DUPLICATE_COOLDOWN_MS = 2_000
 const HISTORY_WINDOW_MS = 60_000
 const MAX_MOVES_PER_TARGET = 10
 const TARGET_PAUSE_MS = 30_000
 const MAX_MOVES_GLOBAL = 40
-const POLL_INTERVAL_MS = 2_500
-const MOVE_CONFIRMATION_TIMEOUT_MS = 12_000
+const POLL_INTERVAL_MS = 750
+const MOVE_CONFIRMATION_TIMEOUT_MS = 3_500
 const RETRY_BASE_MS = 5_000
 const RETRY_MAX_MS = 60_000
 const RATE_LIMIT_FALLBACK_MS = 10_000
@@ -75,6 +76,7 @@ export default plugin<{ jsonStorage: PullSettings }>({
         const pausedUntil = new Map<string, number>()
         const pendingMoves = new Map<string, { channelId: string; requestedAt: number }>()
         const retryStates = new Map<string, { attempts: number; nextAttemptAt: number }>()
+        const targetPermissionCache = new Map<string, { value: boolean | null; checkedAt: number }>()
         let globalRetryAt = 0
         let globalMoveHistory: number[] = []
 
@@ -313,12 +315,86 @@ export default plugin<{ jsonStorage: PullSettings }>({
             return getVoiceInfo(userId)
         }
 
+        function getResponseBody(response: any): any {
+            let body = response?.body ?? response?.data ?? response
+            if (typeof body === 'string') {
+                try {
+                    body = JSON.parse(body)
+                } catch {
+                    return null
+                }
+            }
+            return body
+        }
+
+        function getVoiceChannelCapacity(channel: any, guildId: string, channelId: string): {
+            occupancy: number
+            limit: number
+            isFull: boolean
+        } | null {
+            const limit = Number(channel?.userLimit ?? channel?.user_limit ?? 0)
+            if (!Number.isFinite(limit) || limit <= 0) return null
+
+            try {
+                const all = voiceStore?.getAllVoiceStates?.()
+                const members = all?.[guildId]
+                if (!members || typeof members !== 'object') return null
+
+                let occupancy = 0
+                for (const state of Object.values(members)) {
+                    if (makeVoiceInfo(state, guildId).channelId === channelId) occupancy++
+                }
+
+                return { occupancy, limit, isFull: occupancy >= limit }
+            } catch (error) {
+                logger?.error?.('[Pull] Could not count voice channel members', error)
+                return null
+            }
+        }
+
+        async function targetCanBypassUserLimit(userId: string, channelId: string): Promise<boolean | null> {
+            const cacheKey = `${channelId}:${userId}`
+            const now = Date.now()
+            const cached = targetPermissionCache.get(cacheKey)
+            if (cached && now - cached.checkedAt < 15_000) return cached.value
+
+            try {
+                // Read the target member's effective channel permissions, not the current user's.
+                const response = await restApi.get({
+                    url: `/channels/${channelId}/permissions/member/${userId}`,
+                })
+                const responseStatus = Number(response?.status ?? 0)
+                if (response?.ok === false || responseStatus >= 400) {
+                    throw new Error(`Permission lookup failed with HTTP ${responseStatus || 'unknown'}.`)
+                }
+
+                const payload = getResponseBody(response)
+                const rawPermissions = payload?.permissions ?? payload?.data?.permissions
+                if (rawPermissions == null) {
+                    targetPermissionCache.set(cacheKey, { value: null, checkedAt: now })
+                    return null
+                }
+
+                const permissions = BigInt(String(rawPermissions))
+                const canBypass = (permissions & (ADMINISTRATOR | MOVE_MEMBERS)) !== 0n
+                targetPermissionCache.set(cacheKey, { value: canBypass, checkedAt: now })
+                return canBypass
+            } catch (error) {
+                // If this permission endpoint is unavailable in the current client build,
+                // let Discord validate the move instead of falsely blocking the account.
+                targetPermissionCache.set(cacheKey, { value: null, checkedAt: now })
+                logger?.warn?.('[Pull] Could not read target channel permissions; Discord will validate the move.', error)
+                return null
+            }
+        }
+
         function getRetryAfterMs(error: any): number {
             const candidates = [
                 error?.body?.retry_after,
                 error?.response?.body?.retry_after,
                 error?.data?.retry_after,
                 error?.headers?.['retry-after'],
+                error?.response?.headers?.['retry-after'],
             ]
             for (const candidate of candidates) {
                 const seconds = Number(candidate)
@@ -329,10 +405,10 @@ export default plugin<{ jsonStorage: PullSettings }>({
             return RATE_LIMIT_FALLBACK_MS
         }
 
-        function scheduleTargetRetry(userId: string, now: number): number {
+        function scheduleTargetRetry(userId: string, now: number, baseMs = RETRY_BASE_MS): number {
             const previous = retryStates.get(userId)
             const attempts = Math.min((previous?.attempts ?? 0) + 1, 8)
-            const waitMs = Math.min(RETRY_BASE_MS * 2 ** (attempts - 1), RETRY_MAX_MS)
+            const waitMs = Math.min(baseMs * 2 ** (attempts - 1), RETRY_MAX_MS)
             retryStates.set(userId, { attempts, nextAttemptAt: now + waitMs })
             return waitMs
         }
@@ -477,6 +553,7 @@ export default plugin<{ jsonStorage: PullSettings }>({
             let permissionBlocked = 0
             let coolingDown = 0
             let awaitingConfirmation = 0
+            let waitingForRoom = 0
             const now = Date.now()
 
             for (const userId of targetIds) {
@@ -545,6 +622,15 @@ export default plugin<{ jsonStorage: PullSettings }>({
                     continue
                 }
 
+                const capacity = getVoiceChannelCapacity(destinationChannel, destinationInfo.guildId, destinationInfo.channelId)
+                if (capacity?.isFull) {
+                    const canBypass = await targetCanBypassUserLimit(userId, destinationInfo.channelId)
+                    if (canBypass === false) {
+                        waitingForRoom++
+                        continue
+                    }
+                }
+
                 jobs.push({
                     userId,
                     sourceChannelId: target.channelId,
@@ -604,6 +690,15 @@ export default plugin<{ jsonStorage: PullSettings }>({
                     continue
                 }
 
+                const latestCapacity = getVoiceChannelCapacity(destinationChannel, destinationInfo.guildId, destinationInfo.channelId)
+                if (latestCapacity?.isFull) {
+                    const canBypass = await targetCanBypassUserLimit(job.userId, destinationInfo.channelId)
+                    if (canBypass === false) {
+                        waitingForRoom++
+                        continue
+                    }
+                }
+
                 const userMoves = keepRecent(moveHistory.get(job.userId) ?? [], Date.now())
                 if (userMoves.length >= MAX_MOVES_PER_TARGET) {
                     pausedUntil.set(job.userId, Date.now() + TARGET_PAUSE_MS)
@@ -641,8 +736,10 @@ export default plugin<{ jsonStorage: PullSettings }>({
                     moved++
                 } catch (error: any) {
                     failed++
-                    const statusCode = Number(error?.status ?? 0)
-                    const code = Number(error?.body?.code ?? 0)
+                    const errorBody = getResponseBody(error)
+                    const statusCode = Number(error?.status ?? error?.response?.status ?? error?.statusCode ?? 0)
+                    const code = Number(errorBody?.code ?? error?.body?.code ?? error?.response?.data?.code ?? 0)
+                    const errorMessage = String(errorBody?.message ?? error?.message ?? '').toLowerCase()
 
                     if (statusCode === 429) {
                         globalRetryAt = Date.now() + getRetryAfterMs(error)
@@ -651,8 +748,16 @@ export default plugin<{ jsonStorage: PullSettings }>({
                         break
                     }
 
-                    const retryDelay = scheduleTargetRetry(job.userId, Date.now())
-                    if (statusCode === 403 || code === 50013) {
+                    if (/channel is full|voice channel is full|user limit|channel user limit/.test(errorMessage)) {
+                        retryStates.delete(job.userId)
+                        waitingForRoom++
+                        lastFailure = 'destination voice channel is full; waiting for a free slot'
+                        continue
+                    }
+
+                    const isPermissionFailure = statusCode === 403 || code === 50013
+                    const retryDelay = scheduleTargetRetry(job.userId, Date.now(), isPermissionFailure ? 30_000 : RETRY_BASE_MS)
+                    if (isPermissionFailure) {
                         permissionBlocked++
                     }
 
@@ -679,13 +784,16 @@ export default plugin<{ jsonStorage: PullSettings }>({
             }
 
             if (jobs.length === 0 && moved === 0 && failed === 0) {
+                const capacity = getVoiceChannelCapacity(destinationChannel, destinationInfo.guildId, destinationInfo.channelId)
                 const parts = [
                     `Watching ${targetIds.length} configured account(s).`,
+                    capacity ? `VC occupancy: ${capacity.occupancy}/${capacity.limit}.` : '',
+                    waitingForRoom ? `${waitingForRoom} waiting for a free VC slot (accounts without Administrator/Move Members bypass)` : '',
                     awaitingConfirmation ? `${awaitingConfirmation} waiting for Discord voice-state confirmation` : '',
                     notInVoice ? `${notInVoice} not in voice` : '',
                     otherServer ? `${otherServer} in another server` : '',
                     alreadyWithYou ? `${alreadyWithYou} already with you` : '',
-                    permissionBlocked ? `${permissionBlocked} blocked by channel permissions` : '',
+                    permissionBlocked ? `${permissionBlocked} blocked by Move Members permissions or role hierarchy` : '',
                     coolingDown ? `${coolingDown} waiting for the move cooldown` : '',
                 ].filter(Boolean)
                 status(parts.join(' '))
@@ -694,9 +802,10 @@ export default plugin<{ jsonStorage: PullSettings }>({
 
             const parts = [
                 moved ? `Moved ${moved} account(s) to your current channel.` : '',
-                permissionBlocked ? `${permissionBlocked} blocked by channel permissions.` : '',
+                permissionBlocked ? `${permissionBlocked} blocked by Move Members permissions or role hierarchy.` : '',
                 notInVoice ? `${notInVoice} not in voice.` : '',
                 otherServer ? `${otherServer} in another server.` : '',
+                waitingForRoom ? `${waitingForRoom} waiting for a free VC slot.` : '',
                 failed ? `${failed} move(s) failed (${lastFailure || 'unknown error'}); check permissions and debug logs.` : '',
                 parsed.overflow ? `Only the first ${MAX_TARGETS} valid IDs are used.` : '',
             ].filter(Boolean)
@@ -712,6 +821,13 @@ export default plugin<{ jsonStorage: PullSettings }>({
                 type.includes('GUILD_ROLE_UPDATE') ||
                 type.includes('GUILD_MEMBER_UPDATE')
             ) {
+                if (
+                    type.includes('CHANNEL_UPDATE') ||
+                    type.includes('GUILD_ROLE_UPDATE') ||
+                    type.includes('GUILD_MEMBER_UPDATE')
+                ) {
+                    targetPermissionCache.clear()
+                }
                 scheduleReconcile()
             }
             return payload
@@ -733,6 +849,7 @@ export default plugin<{ jsonStorage: PullSettings }>({
                 moving.clear()
                 moveHistory.clear()
                 pausedUntil.clear()
+                targetPermissionCache.clear()
                 clearRetryState()
                 globalMoveHistory = []
             },
