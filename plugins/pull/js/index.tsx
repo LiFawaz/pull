@@ -34,7 +34,6 @@ let activeResetRuntimeState: (() => void) | null = null
 
 const MAX_TARGETS = 20
 const MOVE_SPACING_MS = 250
-const DUPLICATE_COOLDOWN_MS = 2_000
 const HISTORY_WINDOW_MS = 60_000
 const MAX_MOVES_PER_TARGET = 10
 const TARGET_PAUSE_MS = 30_000
@@ -66,7 +65,6 @@ export default plugin<{ jsonStorage: PullSettings }>({
         let reconcileAgain = false
         let lastStatus = ''
         const moving = new Set<string>()
-        const lastMoveAt = new Map<string, number>()
         const moveHistory = new Map<string, number[]>()
         const pausedUntil = new Map<string, number>()
         const pendingMoves = new Map<string, { channelId: string; requestedAt: number }>()
@@ -176,7 +174,7 @@ export default plugin<{ jsonStorage: PullSettings }>({
                             enabled: true,
                         })
                         status(`Pull is armed for ${parsed.ids.length} configured accounts.`)
-                        scheduleReconcile()
+                        scheduleReconcile(true)
                         commandToast(`Pull started for ${parsed.ids.length} accounts.`, 'success')
                     },
                 }))
@@ -194,7 +192,7 @@ export default plugin<{ jsonStorage: PullSettings }>({
                         clearRetryState()
                         await jsonStorage.set({ enabled: false })
                         status('Pull is stopped.')
-                        scheduleReconcile()
+                        scheduleReconcile(true)
                         commandToast('All pulling has been stopped.', 'success')
                     },
                 }))
@@ -362,19 +360,19 @@ export default plugin<{ jsonStorage: PullSettings }>({
         // getStore is callback-based: stores may not exist yet when the plugin starts.
         const unsubscribeUserStore = getStore('UserStore', (store: any) => {
             userStore = store
-            scheduleReconcile()
+            scheduleReconcile(true)
         })
         const unsubscribeVoiceStore = getStore('VoiceStateStore', (store: any) => {
             voiceStore = store
-            scheduleReconcile()
+            scheduleReconcile(true)
         })
         const unsubscribeChannelStore = getStore('ChannelStore', (store: any) => {
             channelStore = store
-            scheduleReconcile()
+            scheduleReconcile(true)
         })
         const unsubscribePermissionStore = getStore('PermissionStore', (store: any) => {
             permissionStore = store
-            scheduleReconcile()
+            scheduleReconcile(true)
         })
 
         // Current Discord builds expose authenticated requests through the HTTP module.
@@ -386,7 +384,7 @@ export default plugin<{ jsonStorage: PullSettings }>({
                 if (http && typeof http.patch === 'function') {
                     restApi = http
                     logger?.log?.('[Pull] Discord HTTP module is ready.')
-                    scheduleReconcile()
+                    scheduleReconcile(true)
                 }
             },
         )
@@ -565,7 +563,7 @@ export default plugin<{ jsonStorage: PullSettings }>({
                 const recentUserMoves = keepRecent(moveHistory.get(userId) ?? [], now)
                 moveHistory.set(userId, recentUserMoves)
 
-                if (paused > now || now - (lastMoveAt.get(userId) ?? 0) < DUPLICATE_COOLDOWN_MS) {
+                if (paused > now) {
                     coolingDown++
                     continue
                 }
@@ -614,7 +612,7 @@ export default plugin<{ jsonStorage: PullSettings }>({
                     latestDestination.channelId !== destinationInfo.channelId ||
                     latestDestination.guildId !== destinationInfo.guildId
                 ) {
-                    scheduleReconcile()
+                    scheduleReconcile(true)
                     break
                 }
 
@@ -678,7 +676,6 @@ export default plugin<{ jsonStorage: PullSettings }>({
                     const stamp = Date.now()
                     moveHistory.set(job.userId, [...userMoves, stamp])
                     globalMoveHistory.push(stamp)
-                    lastMoveAt.set(job.userId, stamp)
                     pendingMoves.set(job.userId, {
                         channelId: destinationInfo.channelId,
                         requestedAt: stamp,
@@ -812,7 +809,7 @@ export default plugin<{ jsonStorage: PullSettings }>({
         )
 
         status(jsonStorage.cache?.enabled ? 'Pull is armed. Checking configured accounts.' : 'Pull is stopped.')
-        scheduleReconcile()
+        scheduleReconcile(true)
         logger?.log?.('Pull started.')
     },
 
