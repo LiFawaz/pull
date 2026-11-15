@@ -40,3 +40,14 @@ export function calculateVoiceCapacity(
         isFull: available === 0,
     }
 }
+
+/**
+ * The acting account needs Move Members in the source channel and Connect
+ * in the destination channel to use the guild-member move endpoint.
+ */
+export function hasRequiredMovePermissions(
+    canMoveMembersInSource: unknown,
+    canConnectToDestination: unknown,
+): boolean {
+    return canMoveMembersInSource === true && canConnectToDestination === true
+}
