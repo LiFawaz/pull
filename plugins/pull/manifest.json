@@ -3,8 +3,8 @@
   "id": "com.lifawaz.pull",
   "name": "Pull",
   "author": "Li Fawaz (https://github.com/LiFawaz)",
-  "description": "Capacity-aware voice moves with pending-slot reservations and permission checks.",
-  "version": "1.0.12",
+  "description": "Event-driven voice moves with fast capacity retries and permission checks.",
+  "version": "1.0.13",
   "dependencies": {
     "valenced.api": {
       "version": ">=1 <2"
