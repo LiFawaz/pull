@@ -16,7 +16,7 @@ These are local client commands, not server-registered bot commands. They do not
 
 Every push to `main` starts the **Build Pull plugin** GitHub Actions workflow. You can also start it manually from the Actions tab.
 
-When the workflow succeeds, open its run and download the `pull-1.0.6-install-zip` artifact. Install that ZIP from Valenced > Settings > Valenced > Plugins > settings gear > Install from file.
+When the workflow succeeds, open its run and download the `pull-1.0.7-install-zip` artifact. Install that ZIP from Valenced > Settings > Valenced > Plugins > settings gear > Install from file.
 
 ## Configure
 
@@ -28,17 +28,17 @@ When you switch voice channels, Pull checks again and moves those configured acc
 
 ## Continuous checks and retry behavior
 
-While enabled, Pull rechecks configured accounts every 2.5 seconds and also reacts to voice and channel events. After a move request, it waits for Discord's voice-state update before trying again. Temporary request failures use increasing retry delays, and Discord rate limits are respected automatically. `/unpull` stops the loop.
+While enabled, Pull rechecks configured accounts every 750 milliseconds and also reacts to voice and channel events. Move requests are spaced by 350 milliseconds, while the existing per-account and global rate limits remain in place. After a move request, it waits up to 3.5 seconds for Discord's voice-state update before retrying. Temporary failures use backoff, and Discord rate limits are respected automatically. `/unpull` stops the loop.
 
 ## Voice state and diagnostics
 
-Pull reads Discord's voice-state map with its guild keys intact. The status line distinguishes accounts not in voice, accounts in another server, permission-blocked moves, pending voice-state confirmation, and HTTP request failures.
+Pull reads Discord's voice-state map with its guild keys intact. The status line distinguishes accounts not in voice, accounts in another server, pending confirmation, permission or role-hierarchy blocks, and accounts waiting for a free voice slot. When a channel has a user limit, Pull counts its current voice members and checks each target account's effective channel permissions. Accounts with Administrator or Move Members can be tried in a full channel; accounts without either wait until a slot is available. Permission lookup is cached briefly and refreshed after channel or member-role updates.
 
 ## Permission and safety behavior
 
 - Pull checks the current account's effective **Move Members** permission in both the source and destination voice channels.
-- Pull also checks **Connect** in the destination channel.
 - It does not bypass permission checks or try to move accounts from another server.
+- Accounts that Discord rejects with a permission error are retried more slowly; the rejection may be caused by missing permissions or role hierarchy.
 - It does not act on accounts that are not in voice.
 - Only IDs explicitly entered with `/pull` or in the settings are eligible; it does not scan or move other server members.
 - Per-account and global move limits prevent rapid repeat moves. A target that is moved repeatedly is temporarily paused.
