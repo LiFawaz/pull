@@ -146,14 +146,20 @@ export function createSettingsActions(
     }
 }
 
-/** Put previously capacity-blocked users first so they get the next available slot. */
+/** Scope a capacity wait to both the user and the destination channel. */
+export function capacityWaitKey(userId: string, channelId: string): string {
+    return `${channelId}:${userId}`
+}
+
+/** Put users waiting for this exact destination ahead of new targets. */
 export function prioritizeWaitingTargets(
     targetIds: string[],
-    waitingUsers: ReadonlySet<string>,
+    waitingKeys: ReadonlySet<string>,
+    channelId: string,
 ): string[] {
     return [
-        ...targetIds.filter(userId => waitingUsers.has(userId)),
-        ...targetIds.filter(userId => !waitingUsers.has(userId)),
+        ...targetIds.filter(userId => waitingKeys.has(capacityWaitKey(userId, channelId))),
+        ...targetIds.filter(userId => !waitingKeys.has(capacityWaitKey(userId, channelId))),
     ]
 }
 
