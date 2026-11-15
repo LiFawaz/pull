@@ -5,13 +5,13 @@ export type TargetIds = { ids: string[]; overflow: boolean }
 export type VoiceCapacity = { occupancy: number; limit: number; isFull: boolean } | null
 
 export function parseTargetIds(value: unknown, maxTargets: number): TargetIds {
-    const parts = String(value ?? '').split(/[\\s,;]+/)
+    const parts = String(value ?? '').split(/[\s,;]+/)
     const ids: string[] = []
     const seen = new Set<string>()
 
     for (const part of parts) {
         const id = part.trim()
-        if (!/^\\d{15,22}$/.test(id) || seen.has(id)) continue
+        if (!/^\d{15,22}$/.test(id) || seen.has(id)) continue
         seen.add(id)
         ids.push(id)
     }
