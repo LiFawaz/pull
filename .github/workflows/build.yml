@@ -31,6 +31,9 @@ jobs:
       - name: Install dependencies
         run: bun install
 
+      - name: Test Pull logic
+        run: bun run test
+
       - name: Build Pull
         run: bun --bun run build --plugins-dir plugins pull
 
@@ -54,7 +57,7 @@ jobs:
       - name: Upload installable ZIP
         uses: actions/upload-artifact@v4
         with:
-          name: pull-1.0.9-install-zip
+          name: pull-1.0.10-install-zip
           path: build/dist/com.lifawaz.pull@1.0.9.zip
           if-no-files-found: error
           retention-days: 30
