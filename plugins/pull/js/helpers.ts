@@ -145,3 +145,20 @@ export function createSettingsActions(
         },
     }
 }
+
+/** Put previously capacity-blocked users first so they get the next available slot. */
+export function prioritizeWaitingTargets(
+    targetIds: string[],
+    waitingUsers: ReadonlySet<string>,
+): string[] {
+    return [
+        ...targetIds.filter(userId => waitingUsers.has(userId)),
+        ...targetIds.filter(userId => !waitingUsers.has(userId)),
+    ]
+}
+
+/** Event-driven reconciles can run on the next event-loop turn; polling uses a fallback. */
+export function getReconcileDelayMs(immediate: boolean, fallbackMs = 180): number {
+    if (immediate) return 0
+    return Number.isFinite(fallbackMs) ? Math.max(0, Math.floor(fallbackMs)) : 180
+}
