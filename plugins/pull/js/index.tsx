@@ -641,7 +641,7 @@ export default plugin<{ jsonStorage: PullSettings }>({
                 }
 
                 const latestCapacity = getDestinationCapacity(destinationChannel, job.guildId, destinationInfo.channelId)
-                const capacityWait = checkCapacityWait(fullChannelWait, job.userId, latestCapacity)
+                const capacityWait = checkCapacityWait(fullChannelWait, capacityWaitKey(job.userId, destinationInfo.channelId), latestCapacity)
                 // Re-check only users Discord previously rejected for capacity.
                 // A full snapshot alone cannot tell us whether this target has an override.
                 if (capacityWait === 'waiting') {
