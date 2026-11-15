@@ -58,17 +58,17 @@ describe('Pull helper logic', () => {
             },
             'vc-a',
         )
-        expect(cap).toEqual({ occupancy: 2, limit: 2, isFull: true })
-        expect(getVoiceChannelCapacity({ user_limit: 0 }, {}, 'vc-a')).toBeNull()
+        expect(cap).toEqual({ occupancy: 2, reserved: 0, limit: 2, available: 0, isFull: true })
+        expect(getVoiceChannelCapacity({ user_limit: 0 }, {}, 'vc-a')).toBeNull()\n        expect(getVoiceChannelCapacity({}, {}, 'vc-a')).toBeNull()\n        expect(getVoiceChannelCapacity(\n            { userLimit: 3 },\n            { one: { channelId: 'vc-a' } },\n            'vc-a',\n            2,\n        )).toEqual({ occupancy: 1, reserved: 2, limit: 3, available: 0, isFull: true })
         expect(getVoiceChannelCapacity({ userLimit: 3 }, new Map([['x', { channelId: 'vc-a' }]]), 'vc-a'))
-            .toEqual({ occupancy: 1, limit: 3, isFull: false })
+            .toEqual({ occupancy: 1, reserved: 0, limit: 3, available: 2, isFull: false })
     })
 
     test('waits while full and releases a queued user when a slot opens', () => {
         const waiting = new Set(['123456789012345'])
-        expect(checkCapacityWait(waiting, '123456789012345', { occupancy: 2, limit: 2, isFull: true })).toBe('waiting')
+        expect(checkCapacityWait(waiting, '123456789012345', { occupancy: 2, reserved: 0, limit: 2, available: 0, isFull: true })).toBe('waiting')
         expect(waiting.has('123456789012345')).toBe(true)
-        expect(checkCapacityWait(waiting, '123456789012345', { occupancy: 1, limit: 2, isFull: false })).toBe('released')
+        expect(checkCapacityWait(waiting, '123456789012345', { occupancy: 1, reserved: 0, limit: 2, available: 1, isFull: false })).toBe('released')
         expect(waiting.has('123456789012345')).toBe(false)
         expect(checkCapacityWait(waiting, '234567890123456', null)).toBe('not-waiting')
     })
