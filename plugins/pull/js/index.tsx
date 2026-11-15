@@ -6,6 +6,7 @@ import { getModules } from '@valenced/modules/finders'
 import { withProps } from '@valenced/modules/finders/filters'
 import {
     canMoveBetween,
+    capacityWaitKey,
     checkCapacityWait,
     createSettingsActions,
     getResponseBody,
@@ -472,6 +473,17 @@ export default plugin<{ jsonStorage: PullSettings }>({
             const now = Date.now()
             const configuredTargets = new Set(targetIds)
 
+            // Wait states belong to one destination only. Clear stale channels and removed IDs.
+            const currentWaitPrefix = `${destinationInfo.channelId}:`
+            for (const waitKey of fullChannelWait) {
+                const waitingUserId = waitKey.startsWith(currentWaitPrefix)
+                    ? waitKey.slice(currentWaitPrefix.length)
+                    : ''
+                if (!waitingUserId || !configuredTargets.has(waitingUserId)) {
+                    fullChannelWait.delete(waitKey)
+                }
+            }
+
             // Remove reservations for targets that were removed or whose confirmation timed out.
             for (const [userId, pending] of pendingMoves.entries()) {
                 if (
@@ -483,26 +495,30 @@ export default plugin<{ jsonStorage: PullSettings }>({
             }
 
             // Accounts already waiting for capacity get first chance at the next slot.
-            const orderedTargetIds = prioritizeWaitingTargets(targetIds, fullChannelWait)
+            const orderedTargetIds = prioritizeWaitingTargets(targetIds, fullChannelWait, destinationInfo.channelId)
 
             for (const userId of orderedTargetIds) {
                 if (userId === ownId) continue
 
                 const target = getVoiceInfo(userId, destinationInfo.guildId)
+                const waitKey = capacityWaitKey(userId, destinationInfo.channelId)
                 if (!target.channelId) {
                     pendingMoves.delete(userId)
+                    fullChannelWait.delete(waitKey)
                     notInVoice++
                     continue
                 }
 
                 if (!target.guildId || target.guildId !== destinationInfo.guildId) {
                     pendingMoves.delete(userId)
+                    fullChannelWait.delete(waitKey)
                     otherServer++
                     continue
                 }
 
                 if (target.channelId === destinationInfo.channelId) {
                     pendingMoves.delete(userId)
+                    fullChannelWait.delete(waitKey)
                     retryStates.delete(userId)
                     alreadyWithYou++
                     continue
@@ -519,7 +535,7 @@ export default plugin<{ jsonStorage: PullSettings }>({
                 }
 
                 const capacity = getDestinationCapacity(destinationChannel, destinationInfo.guildId, destinationInfo.channelId)
-                const capacityWait = checkCapacityWait(fullChannelWait, userId, capacity)
+                const capacityWait = checkCapacityWait(fullChannelWait, waitKey, capacity)
                 // Do not pre-block a new target just because the channel looks full.
                 // Discord must evaluate that target's effective Connect/user-limit access
                 // (for example, an Administrator override). Only targets rejected for
@@ -687,7 +703,7 @@ export default plugin<{ jsonStorage: PullSettings }>({
                         const capacity = getDestinationCapacity(destinationChannel, job.guildId, destinationInfo.channelId)
                         retryStates.delete(job.userId)
                         if (capacity?.isFull) {
-                            fullChannelWait.add(job.userId)
+                            fullChannelWait.add(capacityWaitKey(job.userId, destinationInfo.channelId))
                             waitingForCapacity++
                             lastFailure = 'destination voice channel is full; waiting for a free slot'
                         } else {
