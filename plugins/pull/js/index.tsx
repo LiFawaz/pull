@@ -18,7 +18,6 @@ const DEFAULT_SETTINGS: PullSettings = {
 }
 
 const MOVE_MEMBERS = 1n << 24n
-const CONNECT = 1n << 20n
 const MAX_TARGETS = 20
 const MOVE_SPACING_MS = 250
 const DUPLICATE_COOLDOWN_MS = 2_000
