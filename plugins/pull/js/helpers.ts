@@ -2,7 +2,7 @@ export const MOVE_MEMBERS = 1n << 24n
 export const CONNECT = 1n << 20n
 
 export type TargetIds = { ids: string[]; overflow: boolean }
-export type VoiceCapacity = { occupancy: number; limit: number; isFull: boolean } | null
+export type VoiceCapacity = { occupancy: number; reserved: number; limit: number; available: number; isFull: boolean } | null
 
 export function parseTargetIds(value: unknown, maxTargets: number): TargetIds {
     const parts = String(value ?? '').split(/[\s,;]+/)
@@ -43,11 +43,26 @@ export function getVoiceChannelCapacity(
     channel: any,
     guildVoiceStates: any,
     channelId: string,
+    reservedSlots = 0,
 ): VoiceCapacity {
-    const limit = Number(channel?.userLimit ?? channel?.user_limit ?? 0)
-    if (!Number.isFinite(limit) || limit <= 0 || !guildVoiceStates || typeof guildVoiceStates !== 'object') {
+    const rawLimit = channel?.userLimit ?? channel?.user_limit
+    if (
+        rawLimit === null ||
+        rawLimit === undefined ||
+        !guildVoiceStates ||
+        typeof guildVoiceStates !== 'object'
+    ) {
         return null
     }
+
+    const parsedLimit = Number(rawLimit)
+    const parsedReserved = Number(reservedSlots)
+    if (!Number.isFinite(parsedLimit) || parsedLimit <= 0) return null
+    if (!Number.isFinite(parsedReserved) || parsedReserved < 0) return null
+
+    const limit = Math.floor(parsedLimit)
+    const reserved = Math.floor(parsedReserved)
+    if (limit <= 0) return null
 
     const states: any[] = guildVoiceStates instanceof Map
         ? Array.from(guildVoiceStates.values())
@@ -59,7 +74,8 @@ export function getVoiceChannelCapacity(
         if (voiceChannelId != null && String(voiceChannelId) === String(channelId)) occupancy++
     }
 
-    return { occupancy, limit, isFull: occupancy >= limit }
+    const available = Math.max(0, limit - occupancy - reserved)
+    return { occupancy, reserved, limit, available, isFull: available === 0 }
 }
 
 export function checkCapacityWait(
