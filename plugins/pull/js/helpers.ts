@@ -22,21 +22,70 @@ export function parseTargetIds(value: unknown, maxTargets: number): TargetIds {
     }
 }
 
-export function canMoveBetween(permissionStore: any, sourceChannel: any, destinationChannel: any): boolean {
-    if (!permissionStore || typeof permissionStore.can !== 'function') return false
-    if (!sourceChannel || !destinationChannel) return false
+export function getMovePermissionIssue(permissionStore: any, destinationChannel: any): string | null {
+    if (!permissionStore || typeof permissionStore.can !== 'function') return 'PermissionStore unavailable'
+    if (!destinationChannel) return 'destination channel unavailable'
 
     try {
-        // Discord requires the acting account to have Connect in the destination
-        // and Move Members permission for this member move.
-        return (
-            permissionStore.can(MOVE_MEMBERS, sourceChannel) === true &&
-            permissionStore.can(MOVE_MEMBERS, destinationChannel) === true &&
-            permissionStore.can(CONNECT, destinationChannel) === true
-        )
+        // Discord requires the active account's Move Members and Connect
+        // permissions for the destination channel. The target's source channel
+        // is not part of this permission pre-check.
+        if (!Boolean(permissionStore.can(MOVE_MEMBERS, destinationChannel))) return 'Move Members'
+        if (!Boolean(permissionStore.can(CONNECT, destinationChannel))) return 'Connect'
+        return null
     } catch {
-        return false
+        return 'permission check failed'
     }
+}
+
+export function canMoveBetween(permissionStore: any, destinationChannel: any): boolean {
+    return getMovePermissionIssue(permissionStore, destinationChannel) === null
+}
+
+export function resolveCurrentVoiceInfo(userId: string, voiceStore: any, channelStore: any) {
+    const disconnected = { channelId: null, guildId: null, channel: null }
+
+    try {
+        const all = voiceStore?.getAllVoiceStates?.()
+        if (all && typeof all === 'object') {
+            for (const [rawGuildId, rawMembers] of Object.entries(all)) {
+                const guildId = String(rawGuildId)
+                if (guildId === '@me' || !rawMembers || typeof rawMembers !== 'object') continue
+
+                const members = rawMembers as any
+                const ownState =
+                    voiceStore?.getVoiceState?.(guildId, userId) ??
+                    members[userId]
+
+                // An explicit own voice state with no channel means disconnected.
+                // Never fall back to a stale client channel or another user's state.
+                if (ownState) {
+                    const rawChannelId = ownState.channelId ?? ownState.channel_id
+                    if (rawChannelId == null || String(rawChannelId).length === 0) continue
+                    const channelId = String(rawChannelId)
+                    return {
+                        channelId,
+                        guildId,
+                        channel: channelStore?.getChannel?.(channelId) ?? null,
+                    }
+                }
+
+                const activeChannelId = voiceStore?.getCurrentClientVoiceChannelId?.(guildId)
+                if (activeChannelId) {
+                    const channelId = String(activeChannelId)
+                    return {
+                        channelId,
+                        guildId,
+                        channel: channelStore?.getChannel?.(channelId) ?? null,
+                    }
+                }
+            }
+        }
+    } catch {
+        // Store initialization and voice-state events are retried by the plugin loop.
+    }
+
+    return disconnected
 }
 
 export function getVoiceChannelCapacity(

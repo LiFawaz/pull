@@ -3,6 +3,7 @@ import {
     CONNECT,
     MOVE_MEMBERS,
     canMoveBetween,
+    getMovePermissionIssue,
     checkCapacityWait,
     capacityWaitKey,
     createSettingsActions,
@@ -13,6 +14,7 @@ import {
     parseTargetIds,
     prioritizeWaitingTargets,
     getReconcileDelayMs,
+    resolveCurrentVoiceInfo,
 } from './helpers'
 
 describe('Pull helper logic', () => {
@@ -34,21 +36,64 @@ describe('Pull helper logic', () => {
         })
     })
 
-    test('requires Move Members and destination Connect from the acting account', () => {
-        const source = { id: 'source' }
+    test('checks Move Members and Connect only against the destination channel', () => {
         const destination = { id: 'destination' }
-        const granted = new Set([MOVE_MEMBERS.toString() + ':source', MOVE_MEMBERS.toString() + ':destination', CONNECT.toString() + ':destination'])
+        const calls: Array<{ permission: bigint; channel: { id: string } }> = []
+        const granted = new Set([
+            MOVE_MEMBERS.toString() + ':destination',
+            CONNECT.toString() + ':destination',
+        ])
         const store = {
             can(permission: bigint, channel: { id: string }) {
+                calls.push({ permission, channel })
                 return granted.has(permission.toString() + ':' + channel.id)
             },
         }
-        expect(canMoveBetween(store, source, destination)).toBe(true)
+        expect(canMoveBetween(store, destination)).toBe(true)
+        expect(calls).toHaveLength(2)
+        expect(calls.every(call => call.channel === destination)).toBe(true)
+        expect(getMovePermissionIssue(store, destination)).toBeNull()
+
         granted.delete(CONNECT.toString() + ':destination')
-        expect(canMoveBetween(store, source, destination)).toBe(false)
+        expect(getMovePermissionIssue(store, destination)).toBe('Connect')
+        expect(canMoveBetween(store, destination)).toBe(false)
         granted.add(CONNECT.toString() + ':destination')
-        granted.delete(MOVE_MEMBERS.toString() + ':source')
-        expect(canMoveBetween(store, source, destination)).toBe(false)
+        granted.delete(MOVE_MEMBERS.toString() + ':destination')
+        expect(getMovePermissionIssue(store, destination)).toBe('Move Members')
+        expect(canMoveBetween(store, destination)).toBe(false)
+    })
+
+    test('accepts truthy permission-store results', () => {
+        const destination = { id: 'destination' }
+        const store = { can: () => 1 }
+        expect(getMovePermissionIssue(store, destination)).toBeNull()
+    })
+
+    test('waits while disconnected and resumes when the active account rejoins voice', () => {
+        const userId = '123456789012345'
+        const disconnectedStore = {
+            getAllVoiceStates: () => ({ 'guild-a': { [userId]: { channelId: null } } }),
+            getVoiceState: () => ({ channelId: null }),
+            getCurrentClientVoiceChannelId: () => 'stale-channel',
+        }
+        expect(resolveCurrentVoiceInfo(userId, disconnectedStore, {})).toEqual({
+            channelId: null,
+            guildId: null,
+            channel: null,
+        })
+
+        const channel = { id: 'voice-b' }
+        const connectedStore = {
+            getAllVoiceStates: () => ({ 'guild-a': { [userId]: { channelId: 'voice-b' } } }),
+            getVoiceState: () => ({ channelId: 'voice-b' }),
+        }
+        expect(resolveCurrentVoiceInfo(userId, connectedStore, {
+            getChannel: (id: string) => id === 'voice-b' ? channel : null,
+        })).toEqual({
+            channelId: 'voice-b',
+            guildId: 'guild-a',
+            channel,
+        })
     })
 
     test('counts voice states and recognizes a full channel', () => {

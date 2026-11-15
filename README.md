@@ -22,17 +22,17 @@ When the workflow succeeds, open its run and download the `pull-1.0.10-install-z
 
 The plugin settings still allow you to paste Discord user IDs manually. Use one ID per line or separate them with commas. Up to 20 IDs are supported.
 
-Join a voice channel in the server where the configured accounts are connected. Pull moves only configured accounts that are already connected to voice in that same server.
+Join a voice channel in the server where the configured accounts are connected. Pull moves only configured accounts that are already connected to voice in that same server. If you leave voice while Pull is enabled, it stays armed and resumes automatically when you rejoin.
 
 When you switch voice channels, Pull checks again and moves those configured accounts to your new channel. If a configured account disconnects and later joins voice, Pull checks it again.
 
 ## Continuous checks and retry behavior
 
-While enabled, Pull rechecks configured accounts every 500 milliseconds and also reacts to voice and channel events. Move requests are spaced by 250 milliseconds, while the existing per-account and global rate limits remain in place. After a move request, it waits up to 8 seconds for Discord's voice-state update before retrying. Temporary failures use backoff, and Discord rate limits are respected automatically. `/unpull` stops the loop.
+While enabled, Pull rechecks configured accounts every 250 milliseconds and also reacts to voice and channel events. Move requests are spaced by 250 milliseconds, while the existing per-account and global rate limits remain in place. After a move request, it waits up to 8 seconds for Discord's voice-state update before retrying. Temporary failures use backoff, and Discord rate limits are respected automatically. `/unpull` stops the loop.
 
 ## Voice state and diagnostics
 
-Pull reads Discord's voice-state map with its guild keys intact. The status line distinguishes accounts not in voice, accounts in another server, pending confirmation, permission or role-hierarchy blocks, and the current voice channel's occupancy. Pull checks the current account's **Connect** permission in the destination and **Move Members** in both source and destination channels. Discord's full-channel override is based on the account performing the move, not on whether the target alt is an Administrator. If Discord rejects a move with a capacity error, Pull waits until a voice slot opens; permission failures use a longer backoff.
+Pull reads Discord's voice-state map with its guild keys intact. The status line distinguishes accounts not in voice, accounts in another server, pending confirmation, permission or role-hierarchy blocks, and the current voice channel's occupancy. Pull checks the active account's effective **Move Members** and **Connect** permissions in the destination channel. Discord's full-channel override is based on the account performing the move, not on whether the target alt is an Administrator. If Discord rejects a move with a capacity error, Pull waits until a voice slot opens; permission failures use a longer backoff.
 
 ## Permission and safety behavior
 

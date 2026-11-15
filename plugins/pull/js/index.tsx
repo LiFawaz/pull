@@ -6,6 +6,7 @@ import { getModules } from '@valenced/modules/finders'
 import { withProps } from '@valenced/modules/finders/filters'
 import {
     canMoveBetween,
+    getMovePermissionIssue,
     capacityWaitKey,
     checkCapacityWait,
     createSettingsActions,
@@ -289,25 +290,11 @@ export default plugin<{ jsonStorage: PullSettings }>({
         }
 
         function getCurrentVoiceInfo(userId: string) {
-            // Prefer the current client session rather than a stale voice session.
-            try {
-                const all = voiceStore?.getAllVoiceStates?.()
-                if (all && typeof all === 'object') {
-                    for (const guildId of Object.keys(all)) {
-                        if (guildId === '@me') continue
-                        const channelId = voiceStore?.getCurrentClientVoiceChannelId?.(guildId)
-                        if (!channelId) continue
-                        return {
-                            channelId: String(channelId),
-                            guildId: String(guildId),
-                            channel: channelStore?.getChannel?.(String(channelId)) ?? null,
-                        }
-                    }
-                }
-            } catch (error) {
-                logger?.error?.('[Pull] Current client voice lookup failed', error)
+            const info = resolveCurrentVoiceInfo(userId, voiceStore, channelStore)
+            if (!info.channelId) {
+                logger?.log?.('[Pull] Active account is not connected to a voice channel; waiting to resume.')
             }
-            return getVoiceInfo(userId)
+            return info
         }
 
         function getDestinationCapacity(channel: any, guildId: string, channelId: string) {
@@ -433,7 +420,7 @@ export default plugin<{ jsonStorage: PullSettings }>({
 
             const destinationInfo = getCurrentVoiceInfo(ownId)
             if (!destinationInfo.channelId || !destinationInfo.guildId) {
-                status('Pull is armed. Join a voice channel to start pulling your configured accounts.')
+                status('Pull is armed and waiting for you to join a voice channel. It will resume automatically.')
                 return
             }
 
@@ -458,13 +445,14 @@ export default plugin<{ jsonStorage: PullSettings }>({
             const jobs: Array<{
                 userId: string
                 sourceChannelId: string
-                sourceChannel: any
                 guildId: string
             }> = []
             let notInVoice = 0
             let otherServer = 0
             let alreadyWithYou = 0
             let permissionBlocked = 0
+            let discordPermissionRejected = 0
+            const permissionIssues = new Set<string>()
             let coolingDown = 0
             let awaitingConfirmation = 0
             let waitingForCapacity = 0
@@ -550,12 +538,10 @@ export default plugin<{ jsonStorage: PullSettings }>({
                     continue
                 }
 
-                const sourceChannel =
-                    target.channel ??
-                    channelStore?.getChannel?.(target.channelId)
-
-                if (!canMoveBetween(sourceChannel, destinationChannel)) {
+                const permissionIssue = getMovePermissionIssue(permissionStore, destinationChannel)
+                if (permissionIssue) {
                     permissionBlocked++
+                    permissionIssues.add(permissionIssue)
                     continue
                 }
 
@@ -582,7 +568,6 @@ export default plugin<{ jsonStorage: PullSettings }>({
                 jobs.push({
                     userId,
                     sourceChannelId: target.channelId,
-                    sourceChannel,
                     guildId: destinationInfo.guildId,
                 })
             }
@@ -629,12 +614,10 @@ export default plugin<{ jsonStorage: PullSettings }>({
                     continue
                 }
 
-                const latestSourceChannel =
-                    latestTarget.channel ??
-                    channelStore?.getChannel?.(job.sourceChannelId)
-
-                if (!canMoveBetween(latestSourceChannel, destinationChannel)) {
+                const permissionIssue = getMovePermissionIssue(permissionStore, destinationChannel)
+                if (permissionIssue) {
                     permissionBlocked++
+                    permissionIssues.add(permissionIssue)
                     continue
                 }
 
@@ -716,6 +699,7 @@ export default plugin<{ jsonStorage: PullSettings }>({
                     const retryDelay = scheduleTargetRetry(job.userId, Date.now(), isPermissionFailure ? 30_000 : RETRY_BASE_MS)
                     if (isPermissionFailure) {
                         permissionBlocked++
+                        discordPermissionRejected++
                     }
 
                     lastFailure = statusCode
@@ -750,7 +734,12 @@ export default plugin<{ jsonStorage: PullSettings }>({
                     notInVoice ? `${notInVoice} not in voice` : '',
                     otherServer ? `${otherServer} in another server` : '',
                     alreadyWithYou ? `${alreadyWithYou} already with you` : '',
-                    permissionBlocked ? `${permissionBlocked} blocked by Move Members permissions or role hierarchy` : '',
+                    permissionBlocked && permissionIssues.size
+                        ? `PermissionStore denied ${Array.from(permissionIssues).join(' and ')} in the destination channel.`
+                        : '',
+                    discordPermissionRejected
+                        ? `Discord rejected ${discordPermissionRejected} move(s) with HTTP 403 / code 50013; check the target's role hierarchy and channel permissions.`
+                        : '',
                     coolingDown ? `${coolingDown} waiting for the move cooldown` : '',
                 ].filter(Boolean)
                 status(parts.join(' '))
@@ -762,7 +751,12 @@ export default plugin<{ jsonStorage: PullSettings }>({
                 waitingForCapacity ? `${waitingForCapacity} waiting for a free voice slot.` : '',
                 awaitingConfirmation ? `${awaitingConfirmation} waiting for voice-state confirmation.` : '',
                 coolingDown ? `${coolingDown} waiting for the move cooldown.` : '',
-                permissionBlocked ? `${permissionBlocked} blocked by Move Members permissions or role hierarchy.` : '',
+                permissionBlocked && permissionIssues.size
+                    ? `PermissionStore denied ${Array.from(permissionIssues).join(' and ')} in the destination channel.`
+                    : '',
+                discordPermissionRejected
+                    ? `Discord rejected ${discordPermissionRejected} move(s) with HTTP 403 / code 50013; check the target's role hierarchy and channel permissions.`
+                    : '',
                 notInVoice ? `${notInVoice} not in voice.` : '',
                 otherServer ? `${otherServer} in another server.` : '',
                 failed ? `${failed} move(s) failed (${lastFailure || 'unknown error'}); check permissions and debug logs.` : '',
