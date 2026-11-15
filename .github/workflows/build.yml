@@ -6,6 +6,9 @@ on:
     paths-ignore:
       - "index.json"
       - "pool/**"
+      - "plugins/pull/js/index.tsx"
+      - "plugins/pull/manifest.json"
+      - "README.md"
   workflow_dispatch:
 
 permissions:
