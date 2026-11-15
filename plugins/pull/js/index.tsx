@@ -376,6 +376,8 @@ export default plugin<{ jsonStorage: PullSettings }>({
             },
         )
 
+        let reconcileStage = 'starting'
+
         async function reconcile() {
             if (stopped) return
             if (reconciling) {
@@ -384,11 +386,20 @@ export default plugin<{ jsonStorage: PullSettings }>({
             }
 
             reconciling = true
+            reconcileStage = 'reading settings'
             try {
                 await runReconcile()
-            } catch (error) {
-                logger?.error?.('[Pull] Reconciliation failed', error)
-                status('Pull could not check voice members. See Valenced debug logs.')
+            } catch (error: any) {
+                const message = error instanceof Error
+                    ? `${error.name}: ${error.message}`
+                    : String(error ?? 'Unknown error')
+                logger?.error?.('[Pull] Reconciliation failed', {
+                    stage: reconcileStage,
+                    message,
+                    stack: error?.stack,
+                    error,
+                })
+                status(`Pull failed while ${reconcileStage}: ${message}. See Debug Logs.`)
             } finally {
                 reconciling = false
                 if (reconcileAgain) {
@@ -399,6 +410,7 @@ export default plugin<{ jsonStorage: PullSettings }>({
         }
 
         async function runReconcile() {
+            reconcileStage = 'reading saved settings'
             const settings = jsonStorage.cache ?? DEFAULT_SETTINGS
             if (!settings.enabled) {
                 status('Pull is stopped.')
@@ -412,12 +424,14 @@ export default plugin<{ jsonStorage: PullSettings }>({
                 return
             }
 
+            reconcileStage = 'finding your active Discord account'
             const ownId = getCurrentUserId()
             if (!ownId) {
                 status('Waiting for your Discord account to load.')
                 return
             }
 
+            reconcileStage = 'finding your current voice channel'
             const destinationInfo = getCurrentVoiceInfo(ownId)
             if (!destinationInfo.channelId || !destinationInfo.guildId) {
                 status('Pull is armed and waiting for you to join a voice channel. It will resume automatically.')
@@ -442,6 +456,7 @@ export default plugin<{ jsonStorage: PullSettings }>({
                 return
             }
 
+            reconcileStage = 'reading configured accounts voice states'
             const jobs: Array<{
                 userId: string
                 sourceChannelId: string
@@ -520,6 +535,7 @@ export default plugin<{ jsonStorage: PullSettings }>({
                     pendingMoves.delete(userId)
                 }
 
+                reconcileStage = `checking voice capacity for ${userId}`
                 const capacity = getDestinationCapacity(destinationChannel, destinationInfo.guildId, destinationInfo.channelId)
                 const capacityWait = checkCapacityWait(fullChannelWait, waitKey, capacity)
                 // Do not pre-block a new target just because the channel looks full.
@@ -538,6 +554,7 @@ export default plugin<{ jsonStorage: PullSettings }>({
                     continue
                 }
 
+                reconcileStage = 'checking destination permissions'
                 const permissionIssue = getMovePermissionIssue(permissionStore, destinationChannel)
                 if (permissionIssue) {
                     permissionBlocked++
@@ -589,6 +606,7 @@ export default plugin<{ jsonStorage: PullSettings }>({
             let lastFailure = ''
 
             for (const job of jobs) {
+                reconcileStage = `sending move request for ${job.userId}`
                 if (stopped || !jsonStorage.cache?.enabled) break
 
                 // Do not keep sending moves to an old destination if you switch channels mid-queue.
@@ -614,6 +632,7 @@ export default plugin<{ jsonStorage: PullSettings }>({
                     continue
                 }
 
+                reconcileStage = 'checking destination permissions'
                 const permissionIssue = getMovePermissionIssue(permissionStore, destinationChannel)
                 if (permissionIssue) {
                     permissionBlocked++

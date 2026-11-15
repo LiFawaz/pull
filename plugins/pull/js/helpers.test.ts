@@ -69,12 +69,32 @@ describe('Pull helper logic', () => {
         expect(getMovePermissionIssue(store, destination)).toBeNull()
     })
 
-    test('waits while disconnected and resumes when the active account rejoins voice', () => {
+    test('uses Discord current-client voice lookup even when cached own state is empty', () => {
+        const userId = '123456789012345'
+        const channel = { id: 'voice-live' }
+        const store = {
+            getAllVoiceStates: () => ({ 'guild-a': { [userId]: { channelId: null } } }),
+            getVoiceState: () => ({ channelId: null }),
+            getCurrentClientVoiceChannelId: () => 'voice-live',
+            getUserVoiceChannelId: () => undefined,
+        }
+        expect(resolveCurrentVoiceInfo(userId, store, {
+            getChannel: (id: string) => id === 'voice-live' ? channel : null,
+        })).toEqual({
+            channelId: 'voice-live',
+            guildId: 'guild-a',
+            channel,
+        })
+    })
+
+    test('waits while disconnected and resumes after Discord reports a new voice state', () => {
         const userId = '123456789012345'
         const disconnectedStore = {
             getAllVoiceStates: () => ({ 'guild-a': { [userId]: { channelId: null } } }),
             getVoiceState: () => ({ channelId: null }),
-            getCurrentClientVoiceChannelId: () => 'stale-channel',
+            getCurrentClientVoiceChannelId: () => undefined,
+            getUserVoiceChannelId: () => undefined,
+            getVoiceStateForUser: () => ({ channelId: null, guildId: 'guild-a' }),
         }
         expect(resolveCurrentVoiceInfo(userId, disconnectedStore, {})).toEqual({
             channelId: null,
@@ -85,13 +105,30 @@ describe('Pull helper logic', () => {
         const channel = { id: 'voice-b' }
         const connectedStore = {
             getAllVoiceStates: () => ({ 'guild-a': { [userId]: { channelId: 'voice-b' } } }),
-            getVoiceState: () => ({ channelId: 'voice-b' }),
+            getCurrentClientVoiceChannelId: () => undefined,
+            getUserVoiceChannelId: (guildId: string, id: string) =>
+                guildId === 'guild-a' && id === userId ? 'voice-b' : undefined,
         }
         expect(resolveCurrentVoiceInfo(userId, connectedStore, {
             getChannel: (id: string) => id === 'voice-b' ? channel : null,
         })).toEqual({
             channelId: 'voice-b',
             guildId: 'guild-a',
+            channel,
+        })
+    })
+
+    test('falls back to official per-user voice state when guild enumeration is unavailable', () => {
+        const channel = { id: 'voice-c' }
+        const store = {
+            getAllVoiceStates: () => { throw new Error('unavailable') },
+            getVoiceStateForUser: () => ({ channelId: 'voice-c', guildId: 'guild-c' }),
+        }
+        expect(resolveCurrentVoiceInfo('123456789012345', store, {
+            getChannel: (id: string) => id === 'voice-c' ? channel : null,
+        })).toEqual({
+            channelId: 'voice-c',
+            guildId: 'guild-c',
             channel,
         })
     })

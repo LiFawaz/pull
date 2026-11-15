@@ -45,45 +45,68 @@ export function canMoveBetween(permissionStore: any, destinationChannel: any): b
 export function resolveCurrentVoiceInfo(userId: string, voiceStore: any, channelStore: any) {
     const disconnected = { channelId: null, guildId: null, channel: null }
 
+    const call = (methodName: string, ...args: any[]) => {
+        try {
+            const method = voiceStore?.[methodName]
+            return typeof method === 'function' ? method.apply(voiceStore, args) : undefined
+        } catch {
+            return undefined
+        }
+    }
+
+    const toInfo = (rawChannelId: any, rawGuildId: any) => {
+        if (rawChannelId == null || rawGuildId == null || String(rawChannelId).length === 0) return null
+        const channelId = String(rawChannelId)
+        const guildId = String(rawGuildId)
+        let channel: any = null
+        try {
+            channel = channelStore?.getChannel?.(channelId) ?? null
+        } catch {
+            channel = null
+        }
+        return { channelId, guildId, channel }
+    }
+
+    let all: any
+    const guildIds: string[] = []
     try {
-        const all = voiceStore?.getAllVoiceStates?.()
-        if (all && typeof all === 'object') {
-            for (const [rawGuildId, rawMembers] of Object.entries(all)) {
-                const guildId = String(rawGuildId)
-                if (guildId === '@me' || !rawMembers || typeof rawMembers !== 'object') continue
-
-                const members = rawMembers as any
-                const ownState =
-                    voiceStore?.getVoiceState?.(guildId, userId) ??
-                    members[userId]
-
-                // An explicit own voice state with no channel means disconnected.
-                // Never fall back to a stale client channel or another user's state.
-                if (ownState) {
-                    const rawChannelId = ownState.channelId ?? ownState.channel_id
-                    if (rawChannelId == null || String(rawChannelId).length === 0) continue
-                    const channelId = String(rawChannelId)
-                    return {
-                        channelId,
-                        guildId,
-                        channel: channelStore?.getChannel?.(channelId) ?? null,
-                    }
-                }
-
-                const activeChannelId = voiceStore?.getCurrentClientVoiceChannelId?.(guildId)
-                if (activeChannelId) {
-                    const channelId = String(activeChannelId)
-                    return {
-                        channelId,
-                        guildId,
-                        channel: channelStore?.getChannel?.(channelId) ?? null,
-                    }
-                }
-            }
+        all = call('getAllVoiceStates')
+        if (all instanceof Map) {
+            guildIds.push(...Array.from(all.keys(), value => String(value)))
+        } else if (all && typeof all === 'object') {
+            guildIds.push(...Object.keys(all))
         }
     } catch {
-        // Store initialization and voice-state events are retried by the plugin loop.
+        // The direct per-user lookup below is still available.
     }
+
+    for (const guildId of guildIds) {
+        if (guildId === '@me') continue
+
+        // Discord's current-client lookup is authoritative and can update
+        // before the cached per-user voice-state object after a reconnect.
+        const activeInfo = toInfo(call('getCurrentClientVoiceChannelId', guildId), guildId)
+        if (activeInfo) return activeInfo
+
+        const userChannelInfo = toInfo(call('getUserVoiceChannelId', guildId, userId), guildId)
+        if (userChannelInfo) return userChannelInfo
+
+        const state = call('getVoiceState', guildId, userId) ??
+            (all instanceof Map ? all.get(guildId)?.[userId] : all?.[guildId]?.[userId])
+        const stateInfo = toInfo(
+            state?.channelId ?? state?.channel_id,
+            state?.guildId ?? state?.guild_id ?? guildId,
+        )
+        if (stateInfo) return stateInfo
+    }
+
+    // Official per-user fallback: this also provides the guild ID.
+    const ownState = call('getVoiceStateForUser', userId)
+    const ownInfo = toInfo(
+        ownState?.channelId ?? ownState?.channel_id,
+        ownState?.guildId ?? ownState?.guild_id,
+    )
+    if (ownInfo) return ownInfo
 
     return disconnected
 }
