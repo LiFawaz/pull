@@ -3,8 +3,8 @@
   "id": "com.lifawaz.pull",
   "name": "Pull",
   "author": "Li Fawaz (https://github.com/LiFawaz)",
-  "description": "Move your configured alt accounts into your current voice channel, with /pull and /unpull commands.",
-  "version": "1.0.6",
+  "description": "Fast continuous voice checks with full-channel permission awareness and safe retries.",
+  "version": "1.0.7",
   "dependencies": {
     "valenced.api": {
       "version": ">=1 <2"
