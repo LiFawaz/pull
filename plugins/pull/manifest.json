@@ -3,8 +3,8 @@
   "id": "com.lifawaz.pull",
   "name": "Pull",
   "author": "Li Fawaz (https://github.com/LiFawaz)",
-  "description": "Fast continuous voice checks, full-channel capacity diagnostics, and permission-aware retries.",
-  "version": "1.0.10",
+  "description": "Capacity-aware voice moves with pending-slot reservations and permission checks.",
+  "version": "1.0.11",
   "dependencies": {
     "valenced.api": {
       "version": ">=1 <2"
