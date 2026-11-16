@@ -17,7 +17,9 @@ import {
     parseTargetIds,
     getReconcileDelayMs,
     prioritizeWaitingTargets,
+    getGuildVoiceStates,
     resolveCurrentVoiceInfo,
+    resolveUserVoiceInfo,
 } from './helpers'
 
 interface PullSettings {
@@ -215,79 +217,12 @@ export default plugin<{ jsonStorage: PullSettings }>({
             }
         }
 
-        function makeVoiceInfo(state: any, indexedGuildId: string | null = null) {
-            if (!state) return { channelId: null, guildId: indexedGuildId, channel: null }
-
-            const rawChannelId = state.channelId ?? state.channel_id
-            const channelId = rawChannelId == null ? null : String(rawChannelId)
-            if (!channelId) {
-                return {
-                    channelId: null,
-                    guildId: indexedGuildId ?? state.guildId ?? state.guild_id ?? null,
-                    channel: null,
-                }
-            }
-
-            let channel: any = null
-            try {
-                channel = channelStore?.getChannel?.(channelId) ?? null
-            } catch {
-                channel = null
-            }
-
-            const rawGuildId =
-                indexedGuildId ??
-                state.guildId ??
-                state.guild_id ??
-                channel?.guildId ??
-                channel?.guild_id
-
-            return {
-                channelId,
-                guildId: rawGuildId == null ? null : String(rawGuildId),
-                channel,
-            }
-        }
-
         function getVoiceInfo(userId: string, preferredGuildId?: string | null): {
             channelId: string | null
             guildId: string | null
             channel: any
         } {
-            // Prefer the destination server when an account has multiple voice sessions.
-            if (preferredGuildId) {
-                try {
-                    const direct =
-                        voiceStore?.getVoiceState?.(preferredGuildId, userId) ??
-                        voiceStore?.getVoiceStates?.(preferredGuildId)?.[userId] ??
-                        voiceStore?.getAllVoiceStates?.()?.[preferredGuildId]?.[userId]
-                    if (direct) return makeVoiceInfo(direct, preferredGuildId)
-                } catch (error) {
-                    logger?.error?.('[Pull] Preferred guild voice lookup failed', error)
-                }
-            }
-
-            try {
-                const all = voiceStore?.getAllVoiceStates?.()
-                if (all && typeof all === 'object') {
-                    for (const [guildId, members] of Object.entries(all)) {
-                        if (guildId === '@me' || !members || typeof members !== 'object') continue
-                        const candidate = (members as any)[userId]
-                        if (candidate) return makeVoiceInfo(candidate, String(guildId))
-                    }
-                }
-            } catch (error) {
-                logger?.error?.('[Pull] All voice states lookup failed', error)
-            }
-
-            try {
-                const state = voiceStore?.getVoiceStateForUser?.(userId) ?? null
-                if (state) return makeVoiceInfo(state)
-            } catch (error) {
-                logger?.error?.('[Pull] Per-user voice state lookup failed', error)
-            }
-
-            return { channelId: null, guildId: null, channel: null }
+            return resolveUserVoiceInfo(userId, preferredGuildId, voiceStore, channelStore)
         }
 
         function getCurrentVoiceInfo(userId: string) {
@@ -306,7 +241,7 @@ export default plugin<{ jsonStorage: PullSettings }>({
                     if (pending.channelId !== channelId) continue
                     if (getVoiceInfo(userId, guildId).channelId !== channelId) reserved++
                 }
-                return getVoiceChannelCapacity(channel, all?.[guildId], channelId, reserved)
+                return getVoiceChannelCapacity(channel, getGuildVoiceStates(all, guildId), channelId, reserved)
             } catch (error) {
                 logger?.error?.('[Pull] Could not inspect voice channel capacity', error)
                 return null
