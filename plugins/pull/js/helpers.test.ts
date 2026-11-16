@@ -31,6 +31,15 @@ describe('Pull helper logic', () => {
         })
     })
 
+    test('accepts all 20 supported target IDs and reports only the 21st as overflow', () => {
+        const ids = Array.from({ length: 20 }, (_, index) => String(123456789012345 + index))
+        expect(parseTargetIds(ids.join('\n'), 20)).toEqual({ ids, overflow: false })
+        expect(parseTargetIds([...ids, '223456789012345'].join('\n'), 20)).toEqual({
+            ids,
+            overflow: true,
+        })
+    })
+
     test('rejects malformed IDs', () => {
         expect(parseTargetIds('abc 1234 -123456789012345', 20)).toEqual({
             ids: [],
