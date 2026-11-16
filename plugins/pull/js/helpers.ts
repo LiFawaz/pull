@@ -275,6 +275,25 @@ export function checkCapacityWait(
     return 'released'
 }
 
+/**
+ * Only hold a retry while Discord still reports the exact source channel from
+ * the previous move request. A fresh voice-state change should be handled now.
+ */
+export function shouldAwaitMoveConfirmation(
+    pending: { channelId: string; sourceChannelId: string; requestedAt: number } | null | undefined,
+    currentTargetChannelId: string | null,
+    destinationChannelId: string,
+    now: number,
+    timeoutMs: number,
+): boolean {
+    return Boolean(
+        pending &&
+        pending.channelId === destinationChannelId &&
+        pending.sourceChannelId === currentTargetChannelId &&
+        now - pending.requestedAt < timeoutMs
+    )
+}
+
 export function getResponseBody(response: any): any {
     let body = response?.body ?? response?.data ?? response?.response?.body ?? response?.response?.data ?? response
     if (typeof body === 'string') {
