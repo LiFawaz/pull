@@ -16,7 +16,7 @@ These are local client commands, not server-registered bot commands. They do not
 
 Every push to `main` starts the **Build Pull plugin** GitHub Actions workflow. You can also start it manually from the Actions tab.
 
-When the workflow succeeds, open its run and download the `pull-1.0.10-install-zip` artifact. Install that ZIP from Valenced > Settings > Valenced > Plugins > settings gear > Install from file.
+When the workflow succeeds, open its run and download the `pull-1.0.17-install-zip` artifact. Install that ZIP from Valenced > Settings > Valenced > Plugins > settings gear > Install from file.
 
 ## Configure
 
@@ -32,11 +32,11 @@ While enabled, Pull rechecks configured accounts every 250 milliseconds and also
 
 ## Voice state and diagnostics
 
-Pull reads Discord's voice-state map with its guild keys intact. The status line distinguishes accounts not in voice, accounts in another server, pending confirmation, permission or role-hierarchy blocks, and the current voice channel's occupancy. Pull checks the active account's effective **Move Members** and **Connect** permissions in the destination channel. Discord's full-channel override is based on the account performing the move, not on whether the target alt is an Administrator. If Discord rejects a move with a capacity error, Pull waits until a voice slot opens; permission failures use a longer backoff.
+Pull reads Discord's voice-state map with its guild keys intact, including object-backed and nested Map-backed store results. The status line distinguishes accounts not in voice, accounts in another server, pending confirmation, permission or role-hierarchy blocks, and the current voice channel's occupancy. Pull checks the active account's effective **Move Members** permission and **Connect** permission in the destination channel. Discord's full-channel override is based on the account performing the move, not on whether the target alt is an Administrator. If Discord rejects a move with a capacity error, Pull waits until a voice slot opens; permission failures use a longer backoff.
 
 ## Permission and safety behavior
 
-- Pull checks the current account's effective **Connect** permission in the destination and **Move Members** permission in both the source and destination voice channels.
+- Pull checks the current account's effective **Move Members** permission and **Connect** permission in the destination voice channel.
 - An alt must already be connected to voice in the same server. An Administrator permission on the alt does not grant your current account permission to move it.
 - Discord can still reject a move because of permissions or role hierarchy; those failures are shown and retried more slowly.
 - Pull does not bypass permission checks or try to move accounts from another server.
