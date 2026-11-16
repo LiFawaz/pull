@@ -20,6 +20,7 @@ import {
     getGuildVoiceStates,
     resolveCurrentVoiceInfo,
     resolveUserVoiceInfo,
+    shouldAwaitMoveConfirmation,
 } from './helpers'
 
 interface PullSettings {
@@ -37,7 +38,7 @@ const DEFAULT_SETTINGS: PullSettings = {
 let activeResetRuntimeState: (() => void) | null = null
 
 const MAX_TARGETS = 20
-const MOVE_SPACING_MS = 250
+const MOVE_SPACING_MS = 50
 const HISTORY_WINDOW_MS = 60_000
 const MAX_MOVES_PER_TARGET = 10
 const TARGET_PAUSE_MS = 30_000
@@ -71,7 +72,7 @@ export default plugin<{ jsonStorage: PullSettings }>({
         const moving = new Set<string>()
         const moveHistory = new Map<string, number[]>()
         const pausedUntil = new Map<string, number>()
-        const pendingMoves = new Map<string, { channelId: string; requestedAt: number }>()
+        const pendingMoves = new Map<string, { channelId: string; sourceChannelId: string; requestedAt: number }>()
         const retryStates = new Map<string, { attempts: number; nextAttemptAt: number }>()
         const fullChannelWait = new Set<string>()
         let globalRetryAt = 0
@@ -464,10 +465,19 @@ export default plugin<{ jsonStorage: PullSettings }>({
                 const pending = pendingMoves.get(userId)
                 if (pending && pending.channelId !== destinationInfo.channelId) {
                     pendingMoves.delete(userId)
-                } else if (pending && now - pending.requestedAt < MOVE_CONFIRMATION_TIMEOUT_MS) {
+                } else if (pending && shouldAwaitMoveConfirmation(
+                    pending,
+                    target.channelId,
+                    destinationInfo.channelId,
+                    now,
+                    MOVE_CONFIRMATION_TIMEOUT_MS,
+                )) {
                     awaitingConfirmation++
                     continue
                 } else if (pending) {
+                    // The target's voice state changed after the previous request.
+                    // Reconcile the new source channel immediately instead of waiting
+                    // for the old confirmation timeout.
                     pendingMoves.delete(userId)
                 }
 
@@ -616,6 +626,7 @@ export default plugin<{ jsonStorage: PullSettings }>({
                     globalMoveHistory.push(stamp)
                     pendingMoves.set(job.userId, {
                         channelId: destinationInfo.channelId,
+                        sourceChannelId: job.sourceChannelId,
                         requestedAt: stamp,
                     })
                     retryStates.delete(job.userId)
