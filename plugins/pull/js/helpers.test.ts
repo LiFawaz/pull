@@ -17,6 +17,7 @@ import {
     getGuildVoiceStates,
     resolveCurrentVoiceInfo,
     resolveUserVoiceInfo,
+    shouldAwaitMoveConfirmation,
 } from './helpers'
 
 describe('Pull helper logic', () => {
@@ -211,6 +212,19 @@ describe('Pull helper logic', () => {
             guildId: 'guild-current',
             channel,
         })
+    })
+
+    test('only waits for confirmation while a target remains in the original source channel', () => {
+        const pending = {
+            channelId: 'destination',
+            sourceChannelId: 'source-a',
+            requestedAt: 1_000,
+        }
+
+        expect(shouldAwaitMoveConfirmation(pending, 'source-a', 'destination', 1_500, 8_000)).toBe(true)
+        expect(shouldAwaitMoveConfirmation(pending, 'source-b', 'destination', 1_500, 8_000)).toBe(false)
+        expect(shouldAwaitMoveConfirmation(pending, 'source-a', 'destination', 9_001, 8_000)).toBe(false)
+        expect(shouldAwaitMoveConfirmation(pending, 'source-a', 'other-destination', 1_500, 8_000)).toBe(false)
     })
 
     test('counts voice states and recognizes a full channel', () => {
