@@ -14,7 +14,9 @@ import {
     parseTargetIds,
     prioritizeWaitingTargets,
     getReconcileDelayMs,
+    getGuildVoiceStates,
     resolveCurrentVoiceInfo,
+    resolveUserVoiceInfo,
 } from './helpers'
 
 describe('Pull helper logic', () => {
@@ -129,6 +131,75 @@ describe('Pull helper logic', () => {
         })).toEqual({
             channelId: 'voice-c',
             guildId: 'guild-c',
+            channel,
+        })
+    })
+
+    test('resolves target voice states from nested Maps in the preferred guild', () => {
+        const userId = '123456789012345'
+        const channel = { id: 'voice-home' }
+        const allVoiceStates = new Map([
+            ['guild-other', new Map([[userId, { channelId: 'voice-other', guildId: 'guild-other' }]])],
+            ['guild-home', new Map([[userId, { channelId: 'voice-home', guildId: 'guild-home' }]])],
+        ])
+        const voiceStore = {
+            getAllVoiceStates: () => allVoiceStates,
+        }
+
+        expect(getGuildVoiceStates(allVoiceStates, 'guild-home')).toBe(allVoiceStates.get('guild-home'))
+        expect(resolveUserVoiceInfo(userId, 'guild-home', voiceStore, {
+            getChannel: (id: string) => id === 'voice-home' ? channel : null,
+        })).toEqual({
+            channelId: 'voice-home',
+            guildId: 'guild-home',
+            channel,
+        })
+    })
+
+    test('supports Map-backed per-guild lookups and preserves foreign-server detection', () => {
+        const userId = '123456789012345'
+        const channel = { id: 'voice-target' }
+        const voiceStore = {
+            getVoiceStates: (guildId: string) => guildId === 'guild-home'
+                ? new Map([[userId, { channelId: 'voice-target' }]])
+                : undefined,
+        }
+
+        expect(resolveUserVoiceInfo(userId, 'guild-home', voiceStore, {
+            getChannel: (id: string) => id === 'voice-target' ? channel : null,
+        })).toEqual({
+            channelId: 'voice-target',
+            guildId: 'guild-home',
+            channel,
+        })
+
+        const elsewhere = resolveUserVoiceInfo(userId, 'guild-home', {
+            getAllVoiceStates: () => new Map([
+                ['guild-other', new Map([[userId, { channelId: 'voice-other' }]])],
+            ]),
+        }, {})
+        expect(elsewhere).toEqual({
+            channelId: 'voice-other',
+            guildId: 'guild-other',
+            channel: null,
+        })
+    })
+
+    test('reads current-client voice state from nested guild Maps', () => {
+        const userId = '123456789012345'
+        const channel = { id: 'voice-current' }
+        const voiceStore = {
+            getAllVoiceStates: () => new Map([
+                ['guild-current', new Map([[userId, { channelId: 'voice-current' }]])],
+            ]),
+            getCurrentClientVoiceChannelId: () => undefined,
+            getUserVoiceChannelId: () => undefined,
+        }
+        expect(resolveCurrentVoiceInfo(userId, voiceStore, {
+            getChannel: (id: string) => id === 'voice-current' ? channel : null,
+        })).toEqual({
+            channelId: 'voice-current',
+            guildId: 'guild-current',
             channel,
         })
     })
