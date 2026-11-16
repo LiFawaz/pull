@@ -42,6 +42,124 @@ export function canMoveBetween(permissionStore: any, destinationChannel: any): b
     return getMovePermissionIssue(permissionStore, destinationChannel) === null
 }
 
+function getCollectionValue(collection: any, key: string): any {
+    if (collection instanceof Map) {
+        const direct = collection.get(key)
+        if (direct !== undefined) return direct
+        for (const [entryKey, value] of collection.entries()) {
+            if (String(entryKey) === String(key)) return value
+        }
+        return undefined
+    }
+
+    if (collection && typeof collection === 'object') return collection[key]
+    return undefined
+}
+
+function getCollectionEntries(collection: any): Array<[string, any]> {
+    if (collection instanceof Map) {
+        return Array.from(collection.entries(), ([key, value]) => [String(key), value])
+    }
+    if (collection && typeof collection === 'object') return Object.entries(collection)
+    return []
+}
+
+/** Return a guild's voice-state collection without assuming object-backed stores. */
+export function getGuildVoiceStates(allVoiceStates: any, guildId: string): any {
+    return getCollectionValue(allVoiceStates, String(guildId)) ?? null
+}
+
+function makeUserVoiceInfo(state: any, indexedGuildId: string | null, channelStore: any) {
+    const rawChannelId = state?.channelId ?? state?.channel_id
+    const channelId = rawChannelId == null || String(rawChannelId).length === 0
+        ? null
+        : String(rawChannelId)
+
+    let channel: any = null
+    if (channelId) {
+        try {
+            channel = channelStore?.getChannel?.(channelId) ?? null
+        } catch {
+            channel = null
+        }
+    }
+
+    const rawGuildId =
+        indexedGuildId ??
+        state?.guildId ??
+        state?.guild_id ??
+        channel?.guildId ??
+        channel?.guild_id
+
+    return {
+        channelId,
+        guildId: rawGuildId == null ? null : String(rawGuildId),
+        channel,
+    }
+}
+
+/**
+ * Resolve a configured target in the destination guild first. Discord stores may
+ * expose voice states as plain objects or nested Maps; both shapes are supported.
+ */
+export function resolveUserVoiceInfo(
+    userId: string,
+    preferredGuildId: string | null | undefined,
+    voiceStore: any,
+    channelStore: any,
+) {
+    const disconnected = { channelId: null, guildId: null, channel: null }
+
+    const call = (methodName: string, ...args: any[]) => {
+        try {
+            const method = voiceStore?.[methodName]
+            return typeof method === 'function' ? method.apply(voiceStore, args) : undefined
+        } catch {
+            return undefined
+        }
+    }
+
+    const all = call('getAllVoiceStates')
+
+    if (preferredGuildId) {
+        const preferredId = String(preferredGuildId)
+        const directState =
+            call('getVoiceState', preferredId, userId) ??
+            getCollectionValue(call('getVoiceStates', preferredId), userId) ??
+            getCollectionValue(getCollectionValue(all, preferredId), userId)
+
+        if (directState != null) {
+            return makeUserVoiceInfo(directState, preferredId, channelStore)
+        }
+    }
+
+    let disconnectedCandidate: ReturnType<typeof makeUserVoiceInfo> | null = null
+
+    for (const [guildId, members] of getCollectionEntries(all)) {
+        if (guildId === '@me') continue
+        const state = getCollectionValue(members, userId)
+        if (!state) continue
+
+        const info = makeUserVoiceInfo(state, guildId, channelStore)
+        if (preferredGuildId && info.guildId === String(preferredGuildId)) return info
+        if (info.channelId) return info
+        disconnectedCandidate ??= info
+    }
+
+    if (disconnectedCandidate) return disconnectedCandidate
+
+    const globalState = call('getVoiceStateForUser', userId)
+    if (globalState) {
+        return makeUserVoiceInfo(
+            globalState,
+            globalState?.guildId ?? globalState?.guild_id ?? null,
+            channelStore,
+        )
+    }
+
+    return disconnected
+}
+
 export function resolveCurrentVoiceInfo(userId: string, voiceStore: any, channelStore: any) {
     const disconnected = { channelId: null, guildId: null, channel: null }
 
@@ -71,11 +189,7 @@ export function resolveCurrentVoiceInfo(userId: string, voiceStore: any, channel
     const guildIds: string[] = []
     try {
         all = call('getAllVoiceStates')
-        if (all instanceof Map) {
-            guildIds.push(...Array.from(all.keys(), value => String(value)))
-        } else if (all && typeof all === 'object') {
-            guildIds.push(...Object.keys(all))
-        }
+        guildIds.push(...getCollectionEntries(all).map(([guildId]) => guildId))
     } catch {
         // The direct per-user lookup below is still available.
     }
@@ -92,7 +206,7 @@ export function resolveCurrentVoiceInfo(userId: string, voiceStore: any, channel
         if (userChannelInfo) return userChannelInfo
 
         const state = call('getVoiceState', guildId, userId) ??
-            (all instanceof Map ? all.get(guildId)?.[userId] : all?.[guildId]?.[userId])
+            getCollectionValue(getCollectionValue(all, guildId), userId)
         const stateInfo = toInfo(
             state?.channelId ?? state?.channel_id,
             state?.guildId ?? state?.guild_id ?? guildId,
