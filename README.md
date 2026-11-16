@@ -28,7 +28,7 @@ When you switch voice channels or reconnect after leaving voice, Pull checks aga
 
 ## Continuous checks and retry behavior
 
-While enabled, Pull rechecks configured accounts every 250 milliseconds and also reacts to voice and channel events. Move requests are spaced by 250 milliseconds, while the existing per-account and global rate limits remain in place. After a move request, it waits up to 8 seconds for Discord's voice-state update before retrying. Temporary failures use backoff, and Discord rate limits are respected automatically. `/unpull` stops the loop.
+While enabled, Pull rechecks configured accounts every 250 milliseconds and also reacts to voice and channel events. Move requests are spaced by 50 milliseconds, while Discord rate-limit handling and the existing per-account and global move limits remain in place. A target's 8-second confirmation window no longer blocks a retry after its voice state changes to a different source channel. After a move request, it waits up to 8 seconds for Discord's voice-state update before retrying. Temporary failures use backoff, and Discord rate limits are respected automatically. `/unpull` stops the loop.
 
 ## Voice state and diagnostics
 
