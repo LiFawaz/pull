@@ -8,13 +8,13 @@
       "description": "Event-driven voice moves with fast capacity retries and permission checks.",
       "author": "Li Fawaz (https://github.com/LiFawaz)",
       "channels": {
-        "latest": "1.0.20"
+        "latest": "1.0.21"
       },
       "versions": {
-        "1.0.20": {
-          "url": "https://raw.githubusercontent.com/LiFawaz/pull/fix/voice-state-map-handling-2026-11-16/pool/com.lifawaz.pull%401.0.20.zip",
-          "sha256": "64f7ce9466629d98edf22ee226b9365698855182a7e8257fe47aaa6779fac829",
-          "size": 7324,
+        "1.0.21": {
+          "url": "https://raw.githubusercontent.com/LiFawaz/pull/fix/voice-state-map-handling-2026-11-16/pool/com.lifawaz.pull%401.0.21.zip",
+          "sha256": "8a43d57669c9243243ab1b7aeaac252b36aa2cda0943bf1a857036192b0a0f25",
+          "size": 7329,
           "dependencies": {
             "valenced.api": {
               "version": ">=1 <2"
