@@ -11,7 +11,7 @@ on:
 permissions:
   contents: write
 
-# Prevent two runs on the same branch from publishing over each other.
+# Keep one publisher per branch; older queued runs must not overwrite newer source.
 concurrency:
   group: pull-build-${{ github.ref }}
   cancel-in-progress: false
@@ -56,15 +56,21 @@ jobs:
 
       - name: Publish repository index and ZIP
         run: |
-          python scripts/publish_index.py pull
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add index.json pool/
-          if ! git diff --cached --quiet; then
-            git commit -m "Publish Pull ${{ steps.plugin.outputs.version }} [skip ci]"
-            if ! git push origin "HEAD:${GITHUB_REF}"; then
-              git fetch origin "${GITHUB_REF}"
-              git rebase "origin/${GITHUB_REF_NAME}"
+
+          # The branch may have received an earlier publish commit while this
+          # run was building. Refresh only if the actual plugin source is unchanged.
+          git fetch origin "${GITHUB_REF}"
+          REMOTE_REF="origin/${GITHUB_REF_NAME}"
+          if ! git diff --quiet HEAD "$REMOTE_REF" -- plugins/pull; then
+            echo "::warning::Pull source changed while this run was building; skipping repository publication. The verified ZIP artifact will still be uploaded."
+          else
+            git reset --hard "$REMOTE_REF"
+            python scripts/publish_index.py pull
+            git add index.json pool/
+            if ! git diff --cached --quiet; then
+              git commit -m "Publish Pull ${{ steps.plugin.outputs.version }} [skip ci]"
               git push origin "HEAD:${GITHUB_REF}"
             fi
           fi
