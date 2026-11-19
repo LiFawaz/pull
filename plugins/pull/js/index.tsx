@@ -36,8 +36,9 @@ const DEFAULT_SETTINGS: PullSettings = {
 }
 
 let activeResetRuntimeState: (() => void) | null = null
+let activeSessionArmed = false
 
-const MAX_TARGETS = 20
+const MAX_TARGETS = 10
 const MOVE_SPACING_MS = 50
 const HISTORY_WINDOW_MS = 60_000
 const MAX_MOVES_PER_TARGET = 10
@@ -64,6 +65,7 @@ export default plugin<{ jsonStorage: PullSettings }>({
     start(api) {
         const { cleanup, jsonStorage, logger } = api
         let stopped = false
+        // Saved enabled state must not silently restart moves after a Discord reload.
         let reconcileTimer: ReturnType<typeof setTimeout> | null = null
         let pollTimer: ReturnType<typeof setInterval> | null = null
         let reconciling = false
@@ -174,6 +176,7 @@ export default plugin<{ jsonStorage: PullSettings }>({
                         }
 
                         clearRetryState()
+                        activeSessionArmed = true
                         await jsonStorage.set({
                             userIds: parsed.ids.join('\n'),
                             enabled: true,
@@ -194,6 +197,7 @@ export default plugin<{ jsonStorage: PullSettings }>({
                     type: 1,
                     shouldHide: () => false,
                     execute: async () => {
+                        activeSessionArmed = false
                         clearRetryState()
                         await jsonStorage.set({ enabled: false })
                         status('Pull is stopped.')
@@ -349,8 +353,8 @@ export default plugin<{ jsonStorage: PullSettings }>({
         async function runReconcile() {
             reconcileStage = 'reading saved settings'
             const settings = jsonStorage.cache ?? DEFAULT_SETTINGS
-            if (!settings.enabled) {
-                status('Pull is stopped.')
+            if (!activeSessionArmed || !settings.enabled) {
+                status('Pull is stopped. Use /pull or Start Pull to enable it.')
                 return
             }
 
@@ -553,7 +557,7 @@ export default plugin<{ jsonStorage: PullSettings }>({
 
             for (const job of jobs) {
                 reconcileStage = `sending move request for ${job.userId}`
-                if (stopped || !jsonStorage.cache?.enabled) break
+                if (stopped || !activeSessionArmed || !jsonStorage.cache?.enabled) break
 
                 // Do not keep sending moves to an old destination if you switch channels mid-queue.
                 const latestDestination = getCurrentVoiceInfo(ownId)
@@ -756,6 +760,7 @@ export default plugin<{ jsonStorage: PullSettings }>({
             ...commandUnsubscribers,
             () => {
                 stopped = true
+                activeSessionArmed = false
                 if (activeResetRuntimeState === clearRetryState) activeResetRuntimeState = null
                 if (reconcileTimer) clearTimeout(reconcileTimer)
                 reconcileScheduledImmediate = false
@@ -768,7 +773,8 @@ export default plugin<{ jsonStorage: PullSettings }>({
             },
         )
 
-        status(jsonStorage.cache?.enabled ? 'Pull is armed. Checking configured accounts.' : 'Pull is stopped.')
+        activeSessionArmed = false
+        status('Pull is stopped. Use /pull or Start Pull to enable it.')
         scheduleReconcile(true)
         logger?.log?.('Pull started.')
     },
@@ -808,10 +814,12 @@ export default plugin<{ jsonStorage: PullSettings }>({
         }
 
         const startPull = () => {
+            activeSessionArmed = true
             void settingsActions.startPull(draft)
         }
 
         const stopPull = () => {
+            activeSessionArmed = false
             void settingsActions.stopPull()
         }
 
@@ -823,7 +831,7 @@ export default plugin<{ jsonStorage: PullSettings }>({
                     </Text>
                     <Text style={{ color: mutedColor, fontSize: 14 }}>
                         Add the Discord user IDs of the accounts you want to move into your current voice channel.
-                        Enter one ID per line, or separate IDs with commas. Up to 20 IDs are supported.
+                        Enter one ID per line, or separate IDs with commas. Up to 10 IDs are supported.
                     </Text>
 
                     <TextInput
