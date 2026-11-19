@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import shutil
 from pathlib import Path
+from urllib.parse import quote
 
 ROOT = Path(__file__).resolve().parents[1]
 PLUGIN = "pull"
@@ -26,6 +28,7 @@ def main() -> None:
     shutil.copy2(archive, published)
 
     data = published.read_bytes()
+    ref = quote(os.environ.get("GITHUB_REF_NAME") or "main", safe="/")
     entry = {
         "name": manifest["name"],
         "description": manifest["description"],
@@ -33,7 +36,7 @@ def main() -> None:
         "channels": {"latest": version},
         "versions": {
             version: {
-                "url": f"https://raw.githubusercontent.com/LiFawaz/pull/main/pool/{archive.name.replace('@', '%40')}",
+                "url": f"https://raw.githubusercontent.com/LiFawaz/pull/{ref}/pool/{archive.name.replace('@', '%40')}",
                 "sha256": hashlib.sha256(data).hexdigest(),
                 "size": len(data),
                 "dependencies": manifest["dependencies"],
@@ -50,7 +53,7 @@ def main() -> None:
         json.dumps(index, indent=2, ensure_ascii=False) + "\n",
         encoding="utf-8",
     )
-    print(f"Published {published.name} ({len(data)} bytes)")
+    print(f"Published {published.name} ({len(data)} bytes) for ref {ref}")
 
 
 if __name__ == "__main__":
