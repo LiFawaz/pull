@@ -13,8 +13,8 @@
       "versions": {
         "1.0.19": {
           "url": "https://raw.githubusercontent.com/LiFawaz/pull/fix/voice-state-map-handling-2026-11-16/pool/com.lifawaz.pull%401.0.19.zip",
-          "sha256": "98b71fa8e104abc6bb2d66251b9811ab3ac62bf5d7e187d5ebde0bc9bdf22388",
-          "size": 7059,
+          "sha256": "0af20ecfdfdf3bbafcc6457644bdd98985cb0c786851a97f32127f031ed77ee2",
+          "size": 7325,
           "dependencies": {
             "valenced.api": {
               "version": ">=1 <2"
