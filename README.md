@@ -24,7 +24,7 @@ The plugin settings still allow you to paste Discord user IDs manually. Use one 
 
 Join a voice channel in the server where the configured accounts are connected. Pull moves only configured accounts that are already connected to voice in that same server. Pull does not resume automatically after a Discord app restart. Start it again with `/pull` or the Start Pull button. While active in the current session, it resumes when you rejoin voice.
 
-When you switch voice channels or reconnect after leaving voice, Pull checks again using Discord's current-client voice channel lookup and moves those configured accounts to your new channel. If a configured account disconnects and later joins voice, Pull checks it again.
+When you switch voice channels or reconnect after leaving voice, Pull checks again using Discord's current-client voice channel lookup and moves those configured accounts to your new channel. If a configured account disconnects, that ID waits independently for the account to rejoin voice; other configured IDs continue normally. Its old request retry timer is cleared on disconnect, and Pull checks it again after it rejoins. Per-account and global safety limits remain active.
 
 ## Continuous checks and retry behavior
 
