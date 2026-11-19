@@ -6,7 +6,7 @@ A Valenced plugin for moving only the Discord accounts you explicitly configure 
 
 Pull now adds local slash commands to Discord's command picker through Coco's Command Lib.
 
-Use `/pull` and fill `id1`, `id2`, `id3`, and so on. `id1` is required; the other fields are optional. Enter 1–20 different Discord user IDs, one per field. The command saves those IDs and starts Pull without opening plugin settings.
+Use `/pull` and fill `id1`, `id2`, `id3`, and so on. `id1` is required; the other fields are optional. Enter 1–10 different Discord user IDs, one per field. The command saves those IDs and starts Pull without opening plugin settings.
 
 Use `/unpull` to stop all moves. The saved IDs remain in the plugin settings so you can reuse them later.
 
@@ -20,9 +20,9 @@ When the workflow succeeds, open its run and download the `pull-1.0.17-install-z
 
 ## Configure
 
-The plugin settings still allow you to paste Discord user IDs manually. Use one ID per line or separate them with commas. Up to 20 IDs are supported.
+The plugin settings still allow you to paste Discord user IDs manually. Use one ID per line or separate them with commas. Up to 10 IDs are supported.
 
-Join a voice channel in the server where the configured accounts are connected. Pull moves only configured accounts that are already connected to voice in that same server. If you leave voice while Pull is enabled, it stays armed and resumes automatically when you rejoin.
+Join a voice channel in the server where the configured accounts are connected. Pull moves only configured accounts that are already connected to voice in that same server. Pull does not resume automatically after a Discord app restart. Start it again with `/pull` or the Start Pull button. While active in the current session, it resumes when you rejoin voice.
 
 When you switch voice channels or reconnect after leaving voice, Pull checks again using Discord's current-client voice channel lookup and moves those configured accounts to your new channel. If a configured account disconnects and later joins voice, Pull checks it again.
 
