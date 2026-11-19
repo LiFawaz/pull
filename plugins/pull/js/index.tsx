@@ -448,8 +448,13 @@ export default plugin<{ jsonStorage: PullSettings }>({
                 const target = getVoiceInfo(userId, destinationInfo.guildId)
                 const waitKey = capacityWaitKey(userId, destinationInfo.channelId)
                 if (!target.channelId) {
+                    // Treat a disconnect as the end of this target's current voice attempt.
+                    // Clear request backoff so it can be retried promptly after reconnecting.
+                    // Keep pausedUntil and moveHistory intact so safety limits still apply.
                     pendingMoves.delete(userId)
                     fullChannelWait.delete(waitKey)
+                    retryStates.delete(userId)
+                    retryReasons.delete(userId)
                     notInVoice++
                     continue
                 }
@@ -724,7 +729,7 @@ export default plugin<{ jsonStorage: PullSettings }>({
                     capacity ? `VC occupancy: ${capacity.occupancy + capacity.reserved}/${capacity.limit}${capacity.reserved ? ` (${capacity.reserved} pending)` : capacity.isFull ? ' (full)' : ''}.` : '',
                     awaitingConfirmation ? `${awaitingConfirmation} waiting for Discord voice-state confirmation` : '',
                     waitingForCapacity ? `${waitingForCapacity} waiting for a free voice slot` : '',
-                    notInVoice ? `${notInVoice} not in voice` : '',
+                    notInVoice ? `${notInVoice} waiting to rejoin voice` : '',
                     otherServer ? `${otherServer} in another server` : '',
                     alreadyWithYou ? `${alreadyWithYou} already with you` : '',
                     permissionBlocked && permissionIssues.size
@@ -752,7 +757,7 @@ export default plugin<{ jsonStorage: PullSettings }>({
                 discordPermissionRejected
                     ? `Discord rejected ${discordPermissionRejected} move(s) with HTTP 403 / code 50013; check the target's role hierarchy and channel permissions.`
                     : '',
-                notInVoice ? `${notInVoice} not in voice.` : '',
+                notInVoice ? `${notInVoice} waiting to rejoin voice.` : '',
                 otherServer ? `${otherServer} in another server.` : '',
                 failed ? `${failed} move(s) failed (${lastFailure || 'unknown error'}); check permissions and debug logs.` : '',
                 parsed.overflow ? `Only the first ${MAX_TARGETS} valid IDs are used.` : '',
