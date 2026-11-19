@@ -14,9 +14,9 @@ These are local client commands, not server-registered bot commands. They do not
 
 ## Build on GitHub
 
-Every push to `main` starts the **Build Pull plugin** GitHub Actions workflow. You can also start it manually from the Actions tab.
+Every push to `main` or the active repair branch starts the **Build Pull plugin** GitHub Actions workflow. You can also start it manually from the Actions tab.
 
-When the workflow succeeds, open its run and download the `pull-1.0.17-install-zip` artifact. Install that ZIP from Valenced > Settings > Valenced > Plugins > settings gear > Install from file.
+When the workflow succeeds, open its run and download the `pull-<version>-install-zip` artifact. The version matches `plugins/pull/manifest.json`. Install that ZIP from Valenced > Settings > Valenced > Plugins > settings gear > Install from file.
 
 ## Configure
 
