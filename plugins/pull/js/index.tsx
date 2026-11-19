@@ -76,6 +76,7 @@ export default plugin<{ jsonStorage: PullSettings }>({
         const pausedUntil = new Map<string, number>()
         const pendingMoves = new Map<string, { channelId: string; sourceChannelId: string; requestedAt: number }>()
         const retryStates = new Map<string, { attempts: number; nextAttemptAt: number }>()
+        const retryReasons = new Map<string, string>()
         const fullChannelWait = new Set<string>()
         let globalRetryAt = 0
         let globalMoveHistory: number[] = []
@@ -114,6 +115,7 @@ export default plugin<{ jsonStorage: PullSettings }>({
         function clearRetryState() {
             pendingMoves.clear()
             retryStates.clear()
+            retryReasons.clear()
             fullChannelWait.clear()
             globalRetryAt = 0
         }
@@ -410,6 +412,7 @@ export default plugin<{ jsonStorage: PullSettings }>({
             let discordPermissionRejected = 0
             const permissionIssues = new Set<string>()
             let coolingDown = 0
+            const cooldownDetails: string[] = []
             let awaitingConfirmation = 0
             let waitingForCapacity = 0
             const now = Date.now()
@@ -501,7 +504,14 @@ export default plugin<{ jsonStorage: PullSettings }>({
                 const retry = retryStates.get(userId)
                 if (retry && retry.nextAttemptAt > now) {
                     coolingDown++
+                    const seconds = Math.max(1, Math.ceil((retry.nextAttemptAt - now) / 1000))
+                    const reason = retryReasons.get(userId)
+                    cooldownDetails.push(`${userId.slice(-4)}: retry in ${seconds}s${reason ? ` (${reason})` : ''}`)
                     continue
+                }
+                if (retry) {
+                    retryStates.delete(userId)
+                    retryReasons.delete(userId)
                 }
 
                 reconcileStage = 'checking destination permissions'
@@ -518,8 +528,11 @@ export default plugin<{ jsonStorage: PullSettings }>({
 
                 if (paused > now) {
                     coolingDown++
+                    const seconds = Math.max(1, Math.ceil((paused - now) / 1000))
+                    cooldownDetails.push(`${userId.slice(-4)}: safety pause for ${seconds}s after repeated moves`)
                     continue
                 }
+                if (pausedUntil.has(userId)) pausedUntil.delete(userId)
 
                 if (recentUserMoves.length >= MAX_MOVES_PER_TARGET) {
                     pausedUntil.set(userId, now + TARGET_PAUSE_MS)
@@ -529,6 +542,7 @@ export default plugin<{ jsonStorage: PullSettings }>({
 
                 if (moving.has(userId)) {
                     coolingDown++
+                    cooldownDetails.push(`${userId.slice(-4)}: move request is still in progress`)
                     continue
                 }
 
@@ -634,6 +648,7 @@ export default plugin<{ jsonStorage: PullSettings }>({
                         requestedAt: stamp,
                     })
                     retryStates.delete(job.userId)
+                    retryReasons.delete(job.userId)
                     moved++
                 } catch (error: any) {
                     const errorBody = getResponseBody(error)
@@ -654,11 +669,13 @@ export default plugin<{ jsonStorage: PullSettings }>({
                         retryStates.delete(job.userId)
                         if (capacity?.isFull) {
                             fullChannelWait.add(capacityWaitKey(job.userId, destinationInfo.channelId))
+                            retryReasons.set(job.userId, 'destination channel is full')
                             waitingForCapacity++
                             lastFailure = 'destination voice channel is full; waiting for a free slot'
                         } else {
                             failed++
                             retryStates.set(job.userId, { attempts: 1, nextAttemptAt: Date.now() + 1_500 })
+                            retryReasons.set(job.userId, 'Discord reported a capacity error, but the channel snapshot shows a free slot')
                             lastFailure = 'destination voice channel rejected the move; checking again shortly'
                         }
                         continue
@@ -667,6 +684,12 @@ export default plugin<{ jsonStorage: PullSettings }>({
                     failed++
                     const isPermissionFailure = statusCode === 403 || code === 50013
                     const retryDelay = scheduleTargetRetry(job.userId, Date.now(), isPermissionFailure ? 30_000 : RETRY_BASE_MS)
+                    retryReasons.set(
+                        job.userId,
+                        isPermissionFailure
+                            ? `Discord denied the move (HTTP ${statusCode || '?'}${code ? ` / code ${code}` : ''})`
+                            : `request failed${statusCode ? ` with HTTP ${statusCode}` : ''}: ${String(errorBody?.message ?? error?.message ?? 'unknown error').slice(0, 100)}`,
+                    )
                     if (isPermissionFailure) {
                         permissionBlocked++
                         discordPermissionRejected++
@@ -711,6 +734,7 @@ export default plugin<{ jsonStorage: PullSettings }>({
                         ? `Discord rejected ${discordPermissionRejected} move(s) with HTTP 403 / code 50013; check the target's role hierarchy and channel permissions.`
                         : '',
                     coolingDown ? `${coolingDown} waiting for the move cooldown` : '',
+                    cooldownDetails.length ? `Cooldown details: ${cooldownDetails.join('; ')}.` : '',
                 ].filter(Boolean)
                 status(parts.join(' '))
                 return
@@ -721,6 +745,7 @@ export default plugin<{ jsonStorage: PullSettings }>({
                 waitingForCapacity ? `${waitingForCapacity} waiting for a free voice slot.` : '',
                 awaitingConfirmation ? `${awaitingConfirmation} waiting for voice-state confirmation.` : '',
                 coolingDown ? `${coolingDown} waiting for the move cooldown.` : '',
+                cooldownDetails.length ? `Cooldown details: ${cooldownDetails.join('; ')}.` : '',
                 permissionBlocked && permissionIssues.size
                     ? `PermissionStore denied ${Array.from(permissionIssues).join(' and ')} in the destination channel.`
                     : '',
