@@ -32,10 +32,10 @@ describe('Pull helper logic', () => {
         })
     })
 
-    test('accepts all 20 supported target IDs and reports only the 21st as overflow', () => {
-        const ids = Array.from({ length: 20 }, (_, index) => String(123456789012345 + index))
-        expect(parseTargetIds(ids.join('\n'), 20)).toEqual({ ids, overflow: false })
-        expect(parseTargetIds([...ids, '223456789012345'].join('\n'), 20)).toEqual({
+    test('accepts all 10 supported target IDs and reports only the 11th as overflow', () => {
+        const ids = Array.from({ length: 10 }, (_, index) => String(123456789012345 + index))
+        expect(parseTargetIds(ids.join('\n'), 10)).toEqual({ ids, overflow: false })
+        expect(parseTargetIds([...ids, '223456789012345'].join('\n'), 10)).toEqual({
             ids,
             overflow: true,
         })
@@ -192,6 +192,25 @@ describe('Pull helper logic', () => {
             channelId: 'voice-other',
             guildId: 'guild-other',
             channel: null,
+        })
+    })
+
+    test('falls through a stale disconnected preferred-guild entry to the active guild voice state', () => {
+        const userId = '123456789012345'
+        const channel = { id: 'voice-home-active' }
+        const voiceStore = {
+            getVoiceState: () => ({ channelId: null }),
+            getAllVoiceStates: () => new Map([
+                ['guild-home', new Map([[userId, { channelId: 'voice-home-active' }]])],
+                ['guild-other', new Map([[userId, { channelId: 'voice-other' }]])],
+            ]),
+        }
+        expect(resolveUserVoiceInfo(userId, 'guild-home', voiceStore, {
+            getChannel: (id: string) => id === 'voice-home-active' ? channel : null,
+        })).toEqual({
+            channelId: 'voice-home-active',
+            guildId: 'guild-home',
+            channel,
         })
     })
 
