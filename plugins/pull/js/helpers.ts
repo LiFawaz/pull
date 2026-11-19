@@ -129,7 +129,8 @@ export function resolveUserVoiceInfo(
             getCollectionValue(getCollectionValue(all, preferredId), userId)
 
         if (directState != null) {
-            return makeUserVoiceInfo(directState, preferredId, channelStore)
+            const directInfo = makeUserVoiceInfo(directState, preferredId, channelStore)
+            if (directInfo.channelId) return directInfo
         }
     }
 
@@ -141,7 +142,7 @@ export function resolveUserVoiceInfo(
         if (!state) continue
 
         const info = makeUserVoiceInfo(state, guildId, channelStore)
-        if (preferredGuildId && info.guildId === String(preferredGuildId)) return info
+        if (info.channelId && preferredGuildId && info.guildId === String(preferredGuildId)) return info
         if (info.channelId) return info
         disconnectedCandidate ??= info
     }
