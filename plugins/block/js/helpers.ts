@@ -164,9 +164,9 @@ export function resolveCurrentVoiceInfo(
             return { channelId, guildId, channel }
         }
 
-        const state =
-            readVoiceStoreMethod(voiceStore, 'getVoiceState', guildId, userId) ??
-            (all instanceof Map ? all.get(guildId)?.[userId] : all?.[guildId]?.[userId])
+        const members = all instanceof Map ? all.get(guildId) : all?.[guildId]
+        const indexedState = members instanceof Map ? members.get(userId) : members?.[userId]
+        const state = readVoiceStoreMethod(voiceStore, 'getVoiceState', guildId, userId) ?? indexedState
 
         const info = voiceInfoFromState(state, guildId, channelStore)
         if (info.channelId) return info
