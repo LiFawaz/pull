@@ -63,7 +63,7 @@ export default plugin<{ jsonStorage: BlockSettings }>({
         let lastVoiceSession = ''
         const running = new Set<string>()
         const retryAt = new Map<string, number>()
-        const pendingSuccess = new Set<string>()
+        const pendingSuccess = new Map<string, number>()
         const commands: Array<() => void> = []
 
         const status = (message: string) => {
@@ -118,7 +118,9 @@ export default plugin<{ jsonStorage: BlockSettings }>({
                 const attemptKey = guildId + ':' + channelId + ':' + userId + ':' + actionName
                 const now = Date.now()
                 if (now < (retryAt.get(attemptKey) ?? 0)) return
-                if ((actionName === 'mute' || actionName === 'deafen') && pendingSuccess.has(attemptKey)) return
+                const pendingUntil = pendingSuccess.get(attemptKey) ?? 0
+                if (now < pendingUntil) return
+                if (pendingUntil) pendingSuccess.delete(attemptKey)
                 const localPermissionCheck = hasPermission(permissionStore, permission, channel)
                 const currentOwn = resolveCurrentVoiceInfo(ownId, voiceStore, channelStore)
                 const currentTarget = resolveUserVoiceInfo(userId, guildId, voiceStore, channelStore)
@@ -139,11 +141,14 @@ export default plugin<{ jsonStorage: BlockSettings }>({
                         throw rejection
                     }
                     retryAt.delete(attemptKey)
-                    if (actionName === 'mute' || actionName === 'deafen') pendingSuccess.add(attemptKey)
+                    pendingSuccess.set(attemptKey, Date.now() + 2000)
                     results.push(label + ': accepted by Discord')
                 } catch (error: any) {
                     const retryAfterMs = getDiscordRetryAfterMs(error)
+                    const statusCode = Number(error?.status ?? error?.statusCode ?? error?.response?.status ?? 0)
+                    const discordCode = Number(error?.body?.code ?? error?.response?.body?.code ?? 0)
                     if (retryAfterMs > 0) retryAt.set(attemptKey, Date.now() + retryAfterMs)
+                    else if (statusCode === 403 || discordCode === 50013) retryAt.set(attemptKey, Number.POSITIVE_INFINITY)
                     else retryAt.delete(attemptKey)
                     const detail = getDiscordErrorMessage(error)
                     const localNote = permissionStore && !localPermissionCheck
@@ -159,9 +164,12 @@ export default plugin<{ jsonStorage: BlockSettings }>({
             const deafenKey = guildId + ':' + channelId + ':' + userId + ':deafen'
             if (currentState?.mute === true || settings.mute === false) pendingSuccess.delete(muteKey)
             if (currentState?.deaf === true || settings.deafen === false) pendingSuccess.delete(deafenKey)
+            if (resolveUserVoiceInfo(userId, guildId, voiceStore, channelStore).channelId !== channelId) {
+                pendingSuccess.delete(guildId + ':' + channelId + ':' + userId + ':disconnect')
+            }
             await apply(settings.mute !== false, MUTE_MEMBERS, 'Server mute', { mute: true }, currentState?.mute !== true, 'mute')
             await apply(settings.deafen !== false, DEAFEN_MEMBERS, 'Server deafen', { deaf: true }, currentState?.deaf !== true, 'deafen')
-            await apply(settings.disconnect !== false, MOVE_MEMBERS, 'Disconnect', { channel_id: null }, isEntry, 'disconnect')
+            await apply(settings.disconnect !== false, MOVE_MEMBERS, 'Disconnect', { channel_id: null }, true, 'disconnect')
 
             if (results.length) {
                 const summary = userId + ': ' + results.join('; ')
@@ -253,7 +261,7 @@ export default plugin<{ jsonStorage: BlockSettings }>({
                         state,
                         settings.mute !== false,
                         settings.deafen !== false,
-                    )
+                    ) || settings.disconnect !== false
                     if (!entrantSet.has(id) && !needsEnforcement) continue
                     running.add(key)
                     try { await action(id, own.guildId, own.channelId, channel, entrantSet.has(id)) }
@@ -343,7 +351,10 @@ export default plugin<{ jsonStorage: BlockSettings }>({
         const unFlux = onAnyFluxEventDispatched((payload: any) => {
             const type = String(payload?.type ?? '')
             if (type.includes('VOICE_STATE') || type.includes('CHANNEL_UPDATE') ||
-                type.includes('GUILD_ROLE_UPDATE') || type.includes('GUILD_MEMBER_UPDATE')) schedule(true)
+                type.includes('GUILD_ROLE_UPDATE') || type.includes('GUILD_MEMBER_UPDATE')) {
+                if (type.includes('CHANNEL_UPDATE') || type.includes('GUILD_ROLE_UPDATE') || type.includes('GUILD_MEMBER_UPDATE')) retryAt.clear()
+                schedule(true)
+            }
             return payload
         })
 
