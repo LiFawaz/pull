@@ -1,50 +1,29 @@
-# Pull
+# Pull + Block (Valenced)
 
-A Valenced plugin for moving only the Discord accounts you explicitly configure into your current voice channel.
+A combined Valenced plugin with the existing Pull workflow and a new permission-aware Block voice-session protector.
 
-## Quick commands
+## Local slash commands
 
-Pull now adds local slash commands to Discord's command picker through Coco's Command Lib.
+Use `/pull` with `id1`, `id2`, and so on to move selected accounts into your current voice channel. Use `/unpull` to stop Pull.
 
-Use `/pull` and fill `id1`, `id2`, `id3`, and so on. `id1` is required; the other fields are optional. Enter 1–20 different Discord user IDs, one per field. The command saves those IDs and starts Pull without opening plugin settings.
+Use `/block` with `id1`, `id2`, and so on to save up to 20 user IDs and enable Block. Use `/unblock` to pause Block without deleting the saved IDs. These commands are local client commands provided through Coco's Command Lib; they are not bot commands sent to a server.
 
-Use `/unpull` to stop all moves. The saved IDs remain in the plugin settings so you can reuse them later.
+## Block behavior
 
-These are local client commands, not server-registered bot commands. They do not send a command message into the channel.
+Block watches only the voice channel your active account is currently connected to, across whichever server that channel belongs to. When a configured user enters that same channel, Block checks server mute, server deafen, and voice disconnect permissions independently and attempts every enabled action your account is permitted to perform.
 
-## Build on GitHub
+When you leave voice, Block pauses its active session. It automatically resumes when you join another voice channel. It only acts on user IDs you explicitly configure. It does not ban users from a server or create a permanent voice-only ban. A voice disconnect can be followed by the user rejoining, and Discord can reject actions due to missing permissions or role hierarchy.
 
-Every push to `main` starts the **Build Pull plugin** GitHub Actions workflow. You can also start it manually from the Actions tab.
+The Block section in plugin settings lets you save IDs, enable or pause protection, and independently toggle server mute, server deafen, and voice disconnect. Status feedback appears in the same section and through a toast when an action is attempted.
 
-When the workflow succeeds, open its run and download the `pull-1.0.10-install-zip` artifact. Install that ZIP from Valenced > Settings > Valenced > Plugins > settings gear > Install from file.
+## Existing Pull behavior
 
-## Configure
+Pull continues to move only configured accounts already connected to voice in the same server. It checks the active account's effective Move Members and destination Connect permissions, waits for available channel capacity, and confirms moves through Discord voice state. `/unpull` stops Pull.
 
-The plugin settings still allow you to paste Discord user IDs manually. Use one ID per line or separate them with commas. Up to 20 IDs are supported.
+## Install
 
-Join a voice channel in the server where the configured accounts are connected. Pull moves only configured accounts that are already connected to voice in that same server. If you leave voice while Pull is enabled, it stays armed and resumes automatically when you rejoin.
+In Valenced, open Settings > Valenced > Plugins > the settings gear > Install from file, then select the install ZIP produced by the GitHub Actions **test build**. The ZIP has the Valenced-required `manifest.json` and `index.js` files at its root.
 
-When you switch voice channels or reconnect after leaving voice, Pull checks again using Discord's current-client voice channel lookup and moves those configured accounts to your new channel. If a configured account disconnects and later joins voice, Pull checks it again.
+## Source and build
 
-## Continuous checks and retry behavior
-
-While enabled, Pull rechecks configured accounts every 250 milliseconds and also reacts to voice and channel events. Move requests are spaced by 250 milliseconds, while the existing per-account and global rate limits remain in place. After a move request, it waits up to 8 seconds for Discord's voice-state update before retrying. Temporary failures use backoff, and Discord rate limits are respected automatically. `/unpull` stops the loop.
-
-## Voice state and diagnostics
-
-Pull reads Discord's voice-state map with its guild keys intact. The status line distinguishes accounts not in voice, accounts in another server, pending confirmation, permission or role-hierarchy blocks, and the current voice channel's occupancy. Pull checks the active account's effective **Move Members** and **Connect** permissions in the destination channel. Discord's full-channel override is based on the account performing the move, not on whether the target alt is an Administrator. If Discord rejects a move with a capacity error, Pull waits until a voice slot opens; permission failures use a longer backoff.
-
-## Permission and safety behavior
-
-- Pull checks the current account's effective **Connect** permission in the destination and **Move Members** permission in both the source and destination voice channels.
-- An alt must already be connected to voice in the same server. An Administrator permission on the alt does not grant your current account permission to move it.
-- Discord can still reject a move because of permissions or role hierarchy; those failures are shown and retried more slowly.
-- Pull does not bypass permission checks or try to move accounts from another server.
-- It does not act on accounts that are not in voice.
-- Only IDs explicitly entered with `/pull` or in the settings are eligible; it does not scan or move other server members.
-- Per-account and global move limits prevent rapid repeat moves. A target that is moved repeatedly is temporarily paused.
-- Discord may record voice moves in the server audit log.
-
-## Source
-
-This repository contains the source for the Pull plugin. GitHub Actions builds the installable ZIP; no local build environment is required.
+This test is built on `build/pull-plus-block-test`. It does not publish to the main branch or repository index. GitHub Actions runs the helper tests, builds the plugin, packages the install ZIP, and verifies the ZIP structure.
