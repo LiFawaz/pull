@@ -18,21 +18,35 @@ import {
     getReconcileDelayMs,
     prioritizeWaitingTargets,
     resolveCurrentVoiceInfo,
+    getVoiceModerationPermissions,
 } from './helpers'
 
 interface PullSettings {
     userIds: string
     enabled: boolean
     status: string
+    blockUserIds: string
+    blockEnabled: boolean
+    blockMute: boolean
+    blockDeafen: boolean
+    blockDisconnect: boolean
+    blockStatus: string
 }
 
 const DEFAULT_SETTINGS: PullSettings = {
     userIds: '',
     enabled: false,
     status: 'Pull is stopped.',
+    blockUserIds: '',
+    blockEnabled: false,
+    blockMute: true,
+    blockDeafen: true,
+    blockDisconnect: true,
+    blockStatus: 'Block is stopped.',
 }
 
 let activeResetRuntimeState: (() => void) | null = null
+let activeResetBlockRuntimeState: (() => void) | null = null
 
 const MAX_TARGETS = 20
 const MOVE_SPACING_MS = 250
@@ -45,6 +59,8 @@ const MOVE_CONFIRMATION_TIMEOUT_MS = 8_000
 const RETRY_BASE_MS = 5_000
 const RETRY_MAX_MS = 60_000
 const RATE_LIMIT_FALLBACK_MS = 10_000
+const BLOCK_POLL_INTERVAL_MS = 500
+const BLOCK_ACTION_SPACING_MS = 300
 
 function delay(ms: number): Promise<void> {
     return new Promise(resolve => setTimeout(resolve, ms))
@@ -75,6 +91,14 @@ export default plugin<{ jsonStorage: PullSettings }>({
         let globalRetryAt = 0
         let globalMoveHistory: number[] = []
 
+        let blockCheckTimer: ReturnType<typeof setTimeout> | null = null
+        let blockPollTimer: ReturnType<typeof setInterval> | null = null
+        let blockChecking = false
+        let blockCheckAgain = false
+        let lastBlockStatus = ''
+        const blockPresence = new Map<string, boolean>()
+        const blockRunning = new Set<string>()
+
         let userStore: any = null
         let voiceStore: any = null
         let channelStore: any = null
@@ -91,6 +115,23 @@ export default plugin<{ jsonStorage: PullSettings }>({
             }
             logger?.log?.('[Pull]', message)
         }
+
+        function blockStatus(message: string) {
+            if (message === lastBlockStatus) return
+            lastBlockStatus = message
+            try {
+                void jsonStorage.set({ blockStatus: message })
+            } catch (error) {
+                logger?.error?.('[Block] Could not save status', error)
+            }
+            logger?.log?.('[Block]', message)
+        }
+
+        function clearBlockRuntimeState() {
+            blockPresence.clear()
+            blockRunning.clear()
+        }
+        activeResetBlockRuntimeState = clearBlockRuntimeState
 
 
         const commandUnsubscribers: Array<() => void> = []
