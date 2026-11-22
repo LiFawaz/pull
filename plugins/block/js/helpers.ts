@@ -285,3 +285,36 @@ export function getDiscordErrorMessage(error: any): string {
     if (message && message !== 'Error') details.push(message.slice(0, 140))
     return details.join('; ')
 }
+
+
+export function resolveVoiceState(
+    userId: string,
+    guildId: string,
+    voiceStore: any,
+): any | null {
+    const call = (name: string, ...args: any[]) => {
+        try {
+            const method = voiceStore?.[name]
+            return typeof method === 'function' ? method.apply(voiceStore, args) : undefined
+        } catch { return undefined }
+    }
+
+    const direct = call('getVoiceState', guildId, userId)
+        ?? call('getVoiceStates', guildId)?.[userId]
+    if (direct) return direct
+
+    const all = call('getAllVoiceStates')
+    const guildStates = all instanceof Map ? all.get(guildId) : all?.[guildId]
+    if (guildStates instanceof Map) return guildStates.get(userId) ?? null
+    if (guildStates && typeof guildStates === 'object') return guildStates[userId] ?? null
+    return null
+}
+
+export function needsVoiceEnforcement(
+    state: any,
+    muteEnabled: boolean,
+    deafenEnabled: boolean,
+): boolean {
+    return (muteEnabled && state?.mute !== true) ||
+        (deafenEnabled && state?.deaf !== true)
+}
