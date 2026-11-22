@@ -67,7 +67,9 @@ export default plugin<{ jsonStorage: BlockSettings }>({
         let lastVoiceSession = ''
         const running = new Set<string>()
         const lastAttempt = new Map<string, number>()
-        const ACTION_RETRY_COOLDOWN_MS = 30000
+        const lastFailure = new Map<string, number>()
+        const ACTION_SUCCESS_COOLDOWN_MS = 3000
+        const ACTION_FAILURE_COOLDOWN_MS = 30000
         const commands: Array<() => void> = []
 
         const status = (message: string) => {
@@ -120,8 +122,11 @@ export default plugin<{ jsonStorage: BlockSettings }>({
             ) => {
                 if (!enabled || !shouldRun) return
                 const attemptKey = guildId + ':' + channelId + ':' + userId + ':' + actionName
+                const now = Date.now()
                 const last = lastAttempt.get(attemptKey) ?? 0
-                if (Date.now() - last < ACTION_RETRY_COOLDOWN_MS) return
+                const failedAt = lastFailure.get(attemptKey) ?? 0
+                if (now - last < ACTION_SUCCESS_COOLDOWN_MS) return
+                if (now - failedAt < ACTION_FAILURE_COOLDOWN_MS) return
                 const localPermissionCheck = hasPermission(permissionStore, permission, channel)
                 const currentOwn = resolveCurrentVoiceInfo(ownId, voiceStore, channelStore)
                 const currentTarget = resolveUserVoiceInfo(userId, guildId, voiceStore, channelStore)
@@ -140,8 +145,10 @@ export default plugin<{ jsonStorage: BlockSettings }>({
                     if (response?.ok === false || responseStatus >= 400) {
                         throw new Error(getDiscordErrorMessage(response) || ('HTTP ' + responseStatus))
                     }
+                    lastFailure.delete(attemptKey)
                     results.push(label + ': accepted by Discord')
                 } catch (error: any) {
+                    lastFailure.set(attemptKey, Date.now())
                     const detail = getDiscordErrorMessage(error)
                     const localNote = permissionStore && !localPermissionCheck
                         ? ' (the local permission check was negative too)'
@@ -174,6 +181,7 @@ export default plugin<{ jsonStorage: BlockSettings }>({
                     lastTargetsSignature = ''
                     lastVoiceSession = ''
                     lastAttempt.clear()
+                    lastFailure.clear()
                     return
                 }
 
@@ -191,6 +199,7 @@ export default plugin<{ jsonStorage: BlockSettings }>({
                 if (signature !== lastTargetsSignature) {
                     presence.clear()
                     lastAttempt.clear()
+                    lastFailure.clear()
                     lastTargetsSignature = signature
                 }
                 const ownId = currentUserId()
@@ -207,6 +216,7 @@ export default plugin<{ jsonStorage: BlockSettings }>({
                 if (voiceSession !== lastVoiceSession) {
                     presence.clear()
                     lastAttempt.clear()
+                    lastFailure.clear()
                     lastVoiceSession = voiceSession
                 }
                 const channel = own.channel ?? channelStore?.getChannel?.(own.channelId)
@@ -344,6 +354,7 @@ export default plugin<{ jsonStorage: BlockSettings }>({
                 presence.clear()
                 running.clear()
                 lastAttempt.clear()
+                lastFailure.clear()
                 lastVoiceSession = ''
             },
         )
