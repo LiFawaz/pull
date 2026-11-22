@@ -216,14 +216,14 @@ export default plugin<{ jsonStorage: BlockSettings }>({
                     id => resolveUserVoiceInfo(id, own.guildId, voiceStore, channelStore),
                 )
                 for (const id of entrants) {
-                    const key = prefix + id
+                    const key = own.guildId + ':' + own.channelId + ':' + id
                     if (running.has(key)) continue
                     running.add(key)
                     try { await action(id, own.guildId, own.channelId, channel) }
                     finally { running.delete(key) }
                 }
                 if (!entrants.length && String(jsonStorage.cache?.status ?? '').startsWith('Armed')) {
-                    status('Watching ' + ids.length + ' configured user(s) in your current voice channel.')
+                    status('Watching ' + watchIds.length + ' configured user(s) in your current voice channel.')
                 }
             } catch (error: any) {
                 logger?.error?.('[Block] Protection check failed', error)
