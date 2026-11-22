@@ -2,14 +2,14 @@
 
 Standalone Block plugin. It does not include Pull and does not import Pull source files.
 
-Use /block with id1, id2, and optional additional ID fields to watch up to 20 Discord user IDs. Use /unblock to pause protection. The Configure screen also lets you save IDs, enable or pause protection, and toggle server mute, server deafen, and disconnect independently.
+Use /block with id1, id2, and optional additional ID fields to watch up to 20 Discord user IDs. Use /unblock to pause protection. The Configure screen lets you save IDs, enable or pause protection, and independently toggle server mute, server deafen, and disconnect.
 
-Block watches the voice channel your active account is currently connected to. It detects a configured user's transition into that same channel, attempts the enabled actions once for that entry, and does not repeat requests every poll. If the user leaves and joins again, it detects the new entry and tries again. Leaving voice pauses protection; joining voice again resumes it automatically.
+Block watches the voice channel your active account is currently connected to. When a configured user joins, it attempts the enabled actions. While that user remains in your channel, Block checks their server mute and server deafen state and re-applies an enabled action if they become unmuted or undeafened. Enforcement is event-driven with a short retry cooldown; it does not continuously spam requests. Disconnect is attempted on entry, and again if the user leaves and re-enters. Leaving voice pauses protection; joining voice again resumes it automatically.
 
-Block sends each enabled moderation request to Discord instead of treating the phone's cached permission check as final. Discord enforces permissions on its servers: server mute requires Mute Members, server deafen requires Deafen Members, and disconnect requires Move Members. The plugin cannot grant or bypass those permissions, so Discord will reject actions that your account is not allowed to perform. The status field and toast show Discord's HTTP rejection details when available.
+Block sends moderation requests to Discord, which enforces permissions server-side. Server mute requires Mute Members, server deafen requires Deafen Members, and disconnect requires Move Members. The plugin cannot grant or bypass permissions, role hierarchy, or server restrictions. Actions that your account cannot perform will be rejected by Discord. No action pop-up toasts are shown; status and errors remain in the Configure status area and debug logs.
 
 Disconnect only removes the user from the current voice channel. It is not a server ban, and the user may join again.
 
-Version 1.0.1 adds tested ID parsing, tested voice-state resolution and join/rejoin detection, and clearer request diagnostics.
+Version 1.0.2 adds persistent re-mute/re-deafen enforcement, rate-limited retries, silent action handling, and a redesigned Configure section.
 
-Test branch: build/block-standalone-test.
+Test branch: build/block-enforcement-config-test.
