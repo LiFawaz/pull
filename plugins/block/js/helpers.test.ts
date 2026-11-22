@@ -4,6 +4,7 @@ import {
     MUTE_MEMBERS,
     MOVE_MEMBERS,
     getDiscordErrorMessage,
+    getDiscordRetryAfterMs,
     getNewVoiceEntrants,
     hasPermission,
     parseCommandIds,
@@ -165,6 +166,12 @@ describe('Block join detection and permissions', () => {
         expect(hasPermission(store, DEAFEN_MEMBERS, {})).toBe(false)
         expect(hasPermission(store, MOVE_MEMBERS, {})).toBe(true)
         expect(hasPermission(null, MOVE_MEMBERS, {})).toBe(false)
+    })
+
+    test('respects Discord retry_after values without inventing a local cooldown', () => {
+        expect(getDiscordRetryAfterMs({ body: { retry_after: 1.25 } })).toBe(1250)
+        expect(getDiscordRetryAfterMs({ response: { data: { retry_after: 0.5 } } })).toBe(500)
+        expect(getDiscordRetryAfterMs({ body: { message: 'Missing Permissions' } })).toBe(0)
     })
 
     test('extracts useful Discord rejection details', () => {
