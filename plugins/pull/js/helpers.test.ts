@@ -2,6 +2,10 @@ import { describe, expect, test } from 'bun:test'
 import {
     CONNECT,
     MOVE_MEMBERS,
+    MUTE_MEMBERS,
+    DEAFEN_MEMBERS,
+    DISCONNECT_MEMBERS,
+    getVoiceModerationPermissions,
     canMoveBetween,
     getMovePermissionIssue,
     checkCapacityWait,
@@ -241,5 +245,33 @@ describe('Pull fast retry scheduling', () => {
         const ids = ['alt-a', 'alt-b']
         const waiting = new Set([capacityWaitKey('alt-a', 'voice-a')])
         expect(prioritizeWaitingTargets(ids, waiting, 'voice-b')).toEqual(ids)
+    })
+})
+
+
+describe('Block voice moderation permission checks', () => {
+    test('checks server mute, deafen, and disconnect independently', () => {
+        const channel = { id: 'voice-test' }
+        const granted = new Set([MUTE_MEMBERS.toString(), DISCONNECT_MEMBERS.toString()])
+        const store = {
+            can(permission: bigint, target: { id: string }) {
+                expect(target).toBe(channel)
+                return granted.has(permission.toString())
+            },
+        }
+
+        expect(getVoiceModerationPermissions(store, channel)).toEqual({
+            mute: true,
+            deafen: false,
+            disconnect: true,
+        })
+    })
+
+    test('returns all permissions unavailable when PermissionStore is missing', () => {
+        expect(getVoiceModerationPermissions(null, { id: 'voice-test' })).toEqual({
+            mute: false,
+            deafen: false,
+            disconnect: false,
+        })
     })
 })
