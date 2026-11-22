@@ -1,5 +1,4 @@
 import React from 'react'
-import { ToastActionCreators } from '@valenced/discord/actions'
 import { Pressable, ScrollView, Text, TextInput, View } from 'react-native'
 import { getStore, onAnyFluxEventDispatched } from '@valenced/discord/flux'
 import { getModules } from '@valenced/modules/finders'
@@ -64,6 +63,8 @@ export default plugin<{ jsonStorage: BlockSettings }>({
         const presence = new Map<string, boolean>()
         let lastTargetsSignature = ''
         const running = new Set<string>()
+        const lastAttempt = new Map<string, number>()
+        const ACTION_RETRY_COOLDOWN_MS = 5000
         const commands: Array<() => void> = []
 
         const status = (message: string) => {
@@ -75,14 +76,6 @@ export default plugin<{ jsonStorage: BlockSettings }>({
                 logger?.error?.('[Block] Could not save status', error)
             }
             logger?.log?.('[Block]', message)
-        }
-
-        const toast = (message: string, variant: 'default' | 'success' | 'critical' = 'default') => {
-            try {
-                ToastActionCreators.open('BLOCK_COMMAND', { text: '[Block] ' + message, variant })
-            } catch (error) {
-                logger?.error?.('[Block] Toast failed', error)
-            }
         }
 
         const currentUserId = (): string | null => {
@@ -104,7 +97,7 @@ export default plugin<{ jsonStorage: BlockSettings }>({
             }, immediate ? 0 : 150)
         }
 
-        const action = async (userId: string, guildId: string, channelId: string, channel: any) => {
+        const action = async (userId: string, guildId: string, channelId: string, channel: any, isEntry = true) => {
             const settings = jsonStorage.cache ?? DEFAULT_SETTINGS
             const ownId = currentUserId()
             if (!ownId || !http || !channel) return
@@ -114,9 +107,29 @@ export default plugin<{ jsonStorage: BlockSettings }>({
                 target.guildId !== guildId || target.channelId !== channelId) return
 
             const results: string[] = []
+            const readTargetState = () => {
+                try {
+                    return voiceStore?.getVoiceState?.(guildId, userId)
+                        ?? voiceStore?.getVoiceStates?.(guildId)?.[userId]
+                        ?? voiceStore?.getAllVoiceStates?.()?.[guildId]?.[userId]
+                        ?? null
+                } catch { return null }
+            }
+            const initialState = readTargetState()
 
-            const apply = async (enabled: boolean, permission: bigint, label: string, body: Record<string, unknown>) => {
-                if (!enabled) return
+            const apply = async (
+                enabled: boolean,
+                permission: bigint,
+                label: string,
+                body: Record<string, unknown>,
+                shouldRun: boolean,
+                actionName: string,
+            ) => {
+                if (!enabled || !shouldRun) return
+                const attemptKey = guildId + ':' + channelId + ':' + userId + ':' + actionName
+                const last = lastAttempt.get(attemptKey) ?? 0
+                if (Date.now() - last < ACTION_RETRY_COOLDOWN_MS) return
+                lastAttempt.set(attemptKey, Date.now())
                 const localPermissionCheck = hasPermission(permissionStore, permission, channel)
                 const currentOwn = resolveCurrentVoiceInfo(ownId, voiceStore, channelStore)
                 const currentTarget = resolveUserVoiceInfo(userId, guildId, voiceStore, channelStore)
@@ -146,15 +159,15 @@ export default plugin<{ jsonStorage: BlockSettings }>({
                 await delay(ACTION_SPACING_MS)
             }
 
-            await apply(settings.mute !== false, MUTE_MEMBERS, 'Server mute', { mute: true })
-            await apply(settings.deafen !== false, DEAFEN_MEMBERS, 'Server deafen', { deaf: true })
-            await apply(settings.disconnect !== false, MOVE_MEMBERS, 'Disconnect', { channel_id: null })
+            const currentState = readTargetState() ?? initialState
+            await apply(settings.mute !== false, MUTE_MEMBERS, 'Server mute', { mute: true }, currentState?.mute !== true, 'mute')
+            await apply(settings.deafen !== false, DEAFEN_MEMBERS, 'Server deafen', { deaf: true }, currentState?.deaf !== true, 'deafen')
+            await apply(settings.disconnect !== false, MOVE_MEMBERS, 'Disconnect', { channel_id: null }, isEntry, 'disconnect')
 
             if (results.length) {
                 const summary = userId + ': ' + results.join('; ')
                 status(summary)
-                toast(summary, results.some(item => item.includes('rejected')) ? 'critical' : 'default')
-            } else status('All Block actions are disabled in Configure.')
+            }
         }
 
         async function reconcile() {
@@ -210,11 +223,26 @@ export default plugin<{ jsonStorage: BlockSettings }>({
                     presence,
                     id => resolveUserVoiceInfo(id, own.guildId, voiceStore, channelStore),
                 )
-                for (const id of entrants) {
+                const entrantSet = new Set(entrants)
+                for (const id of watchIds) {
+                    const target = resolveUserVoiceInfo(id, own.guildId, voiceStore, channelStore)
+                    if (target.guildId !== own.guildId || target.channelId !== own.channelId) continue
                     const key = own.guildId + ':' + own.channelId + ':' + id
                     if (running.has(key)) continue
+                    const state = (() => {
+                        try {
+                            return voiceStore?.getVoiceState?.(own.guildId, id)
+                                ?? voiceStore?.getVoiceStates?.(own.guildId)?.[id]
+                                ?? voiceStore?.getAllVoiceStates?.()?.[own.guildId]?.[id]
+                                ?? null
+                        } catch { return null }
+                    })()
+                    const needsEnforcement =
+                        (settings.mute !== false && state?.mute !== true) ||
+                        (settings.deafen !== false && state?.deaf !== true)
+                    if (!entrantSet.has(id) && !needsEnforcement) continue
                     running.add(key)
-                    try { await action(id, own.guildId, own.channelId, channel) }
+                    try { await action(id, own.guildId, own.channelId, channel, entrantSet.has(id)) }
                     finally { running.delete(key) }
                 }
                 if (!entrants.length && String(jsonStorage.cache?.status ?? '').startsWith('Armed')) {
@@ -254,7 +282,7 @@ export default plugin<{ jsonStorage: BlockSettings }>({
                     execute: async (args: any[]) => {
                         const parsed = parseCommandIds(args, MAX_TARGETS)
                         if (parsed.error) {
-                            toast(parsed.error, 'critical')
+                            status(parsed.error)
                             return
                         }
                         const ids = parsed.ids
@@ -266,7 +294,6 @@ export default plugin<{ jsonStorage: BlockSettings }>({
                         })
                         status('Armed. Waiting for your active voice channel.')
                         schedule(true)
-                        toast('Protection enabled for ' + ids.length + ' user(s).', 'success')
                     },
                 }))
                 commands.push(registry.registerCommand({
@@ -282,7 +309,6 @@ export default plugin<{ jsonStorage: BlockSettings }>({
                         presence.clear()
                         await jsonStorage.set({ enabled: false, status: 'Block is paused. Saved IDs are kept.' })
                         status('Block is paused. Saved IDs are kept.')
-                        toast('Protection paused.', 'success')
                     },
                 }))
             }
@@ -318,6 +344,7 @@ export default plugin<{ jsonStorage: BlockSettings }>({
                 if (poll) clearInterval(poll)
                 presence.clear()
                 running.clear()
+                lastAttempt.clear()
             },
         )
     },
@@ -325,6 +352,7 @@ export default plugin<{ jsonStorage: BlockSettings }>({
     SettingsComponent({ api }) {
             const settings = api.jsonStorage.use() ?? DEFAULT_SETTINGS
             const [draft, setDraft] = React.useState(String(settings.userIds ?? ''))
+            const [validationError, setValidationError] = React.useState('')
             React.useEffect(() => setDraft(String(settings.userIds ?? '')), [settings.userIds])
             const button = {
                 paddingVertical: 12, paddingHorizontal: 16, borderRadius: 8,
@@ -335,16 +363,14 @@ export default plugin<{ jsonStorage: BlockSettings }>({
             const saveDraft = (enable: boolean) => {
                 const parsed = parseTargetIds(draft, MAX_TARGETS)
                 if (parsed.invalid.length || parsed.overflow || parsed.ids.length === 0) {
-                    ToastActionCreators.open('BLOCK_SETTINGS', {
-                        text: parsed.invalid.length
-                            ? 'Fix invalid Discord user ID(s) before saving.'
-                            : parsed.overflow
-                                ? 'You can save up to ' + MAX_TARGETS + ' unique user IDs.'
-                                : 'Enter at least one valid Discord user ID.',
-                        variant: 'critical',
-                    })
+                    setValidationError(parsed.invalid.length
+                        ? 'Some IDs are invalid. Use numeric Discord user IDs.'
+                        : parsed.overflow
+                            ? 'You can save up to ' + MAX_TARGETS + ' unique IDs.'
+                            : 'Add at least one user ID.')
                     return
                 }
+                setValidationError('')
                 const normalized = parsed.ids.join('\n')
                 setDraft(normalized)
                 void api.jsonStorage.set({
@@ -359,14 +385,17 @@ export default plugin<{ jsonStorage: BlockSettings }>({
                 <ScrollView contentContainerStyle={{ padding: 16 }}>
                     <View style={{ gap: 8 }}>
                         <Text style={{ color: '#F2F3F5', fontSize: 21, fontWeight: '700' }}>Block</Text>
-                        <Text style={{ color: muted, fontSize: 14 }}>
-                            Block watches your active voice channel in any server. When a configured user joins the same channel, it attempts the enabled moderation actions that your account is permitted to use. It pauses when you leave voice and resumes when you join again.
+                        <Text style={{ color: muted, fontSize: 14, lineHeight: 20 }}>
+                            Protect your current voice channel across servers. Block watches the IDs below and keeps enabled actions enforced while they remain in your channel. Protection pauses when you leave voice and resumes when you join again.
                         </Text>
+                        <Text style={{ color: '#F2F3F5', fontSize: 15, fontWeight: '700', marginTop: 14 }}>Watched users</Text>
+                        <Text style={{ color: muted, fontSize: 12 }}>Add up to 20 Discord user IDs, one per line or separated by commas.</Text>
                         <TextInput value={draft} onChangeText={setDraft}
                             placeholder={'123456789012345678\n234567890123456789'}
                             placeholderTextColor="#72767D" multiline autoCapitalize="none"
                             autoCorrect={false} keyboardType="numeric" textAlignVertical="top"
-                            style={{ minHeight: 120, padding: 12, borderRadius: 8, color: '#F2F3F5', backgroundColor: 'rgba(128,128,128,0.16)', fontSize: 15 }} />
+                            style={{ minHeight: 120, padding: 14, borderRadius: 12, color: '#F2F3F5', backgroundColor: 'rgba(128,128,128,0.16)', fontSize: 15, borderWidth: 1, borderColor: 'rgba(255,255,255,0.10)' }} />
+                        {!!validationError && <Text style={{ color: '#ED4245', fontSize: 13 }}>{validationError}</Text>}
                         <Pressable onPress={() => saveDraft(false)}
                             style={{ ...button, backgroundColor: '#4E5058' }}>
                             <Text style={text}>Save IDs</Text>
@@ -379,15 +408,25 @@ export default plugin<{ jsonStorage: BlockSettings }>({
                         }} style={{ ...button, backgroundColor: '#4E5058' }}>
                             <Text style={text}>Pause Block</Text>
                         </Pressable>
-                        <Text style={{ color: '#F2F3F5', fontSize: 16, fontWeight: '700', marginTop: 12 }}>Configure actions</Text>
+                        <Text style={{ color: '#F2F3F5', fontSize: 17, fontWeight: '700', marginTop: 18 }}>Moderation actions</Text>
+                        <Text style={{ color: muted, fontSize: 12 }}>Each action is independent and only works when your Discord account has the required permission.</Text>
                         {(['mute', 'deafen', 'disconnect'] as const).map((key) => (
                             <Pressable key={key} onPress={() => void api.jsonStorage.set({ [key]: !settings[key] })}
-                                style={{ ...button, backgroundColor: '#4E5058' }}>
-                                <Text style={text}>{key === 'mute' ? 'Server mute' : key === 'deafen' ? 'Server deafen' : 'Disconnect'}: {settings[key] ? 'ON' : 'OFF'}</Text>
+                                style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', padding: 14, borderRadius: 12, marginTop: 8, backgroundColor: 'rgba(128,128,128,0.13)', borderWidth: 1, borderColor: settings[key] ? 'rgba(88,101,242,0.65)' : 'rgba(255,255,255,0.08)' }}>
+                                <View style={{ flex: 1, gap: 3 }}>
+                                    <Text style={text}>{key === 'mute' ? 'Server mute' : key === 'deafen' ? 'Server deafen' : 'Disconnect'}</Text>
+                                    <Text style={{ color: muted, fontSize: 12 }}>{key === 'mute' ? 'Re-mute if they unmute themselves' : key === 'deafen' ? 'Re-deafen if they undeafen themselves' : 'Disconnect when they enter your voice channel'}</Text>
+                                </View>
+                                <View style={{ paddingHorizontal: 12, paddingVertical: 6, borderRadius: 20, backgroundColor: settings[key] ? '#5865F2' : '#4E5058' }}>
+                                    <Text style={{ color: '#FFFFFF', fontSize: 12, fontWeight: '700' }}>{settings[key] ? 'ON' : 'OFF'}</Text>
+                                </View>
                             </Pressable>
                         ))}
-                        <Text style={{ color: '#F2F3F5', fontSize: 16, fontWeight: '700', marginTop: 10 }}>Status</Text>
-                        <Text style={{ color: muted, fontSize: 14 }}>{settings.enabled ? 'Enabled' : 'Paused'} · {String(settings.status ?? 'Block is stopped.')}</Text>
+                        <View style={{ marginTop: 18, padding: 14, borderRadius: 12, backgroundColor: 'rgba(128,128,128,0.13)', borderWidth: 1, borderColor: 'rgba(255,255,255,0.08)', gap: 6 }}>
+                            <Text style={{ color: '#F2F3F5', fontSize: 15, fontWeight: '700' }}>Protection status</Text>
+                            <Text style={{ color: settings.enabled ? '#57F287' : muted, fontSize: 13, fontWeight: '700' }}>{settings.enabled ? 'ACTIVE' : 'PAUSED'}</Text>
+                            <Text style={{ color: muted, fontSize: 13, lineHeight: 19 }}>{String(settings.status ?? 'Block is stopped.')}</Text>
+                        </View>
                         <Text style={{ color: muted, fontSize: 12, marginTop: 8 }}>
                             Server mute and deafen require their respective Discord permissions. Disconnect requires Move Members. Discord role hierarchy and server rules can still reject an action. Disconnect does not permanently ban someone from a server.
                         </Text>
