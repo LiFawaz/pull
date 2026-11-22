@@ -4,6 +4,15 @@ import { Pressable, ScrollView, Text, TextInput, View } from 'react-native'
 import { getStore, onAnyFluxEventDispatched } from '@valenced/discord/flux'
 import { getModules } from '@valenced/modules/finders'
 import { withProps } from '@valenced/modules/finders/filters'
+import {
+    getDiscordErrorMessage,
+    getNewVoiceEntrants,
+    hasPermission,
+    parseCommandIds,
+    parseTargetIds,
+    resolveCurrentVoiceInfo,
+    resolveUserVoiceInfo,
+} from './helpers'
 
 interface BlockSettings {
     userIds: string
@@ -25,57 +34,6 @@ const DEFAULT_SETTINGS: BlockSettings = {
 
 const MAX_TARGETS = 20
 
-function parseTargetIds(value: unknown, maxTargets: number) {
-    const parts = String(value ?? '').split(/[\\s,;]+/)
-    const ids: string[] = []
-    const seen = new Set<string>()
-    for (const part of parts) {
-        const id = part.trim()
-        if (!/^\\d{15,22}$/.test(id) || seen.has(id)) continue
-        seen.add(id)
-        ids.push(id)
-    }
-    return { ids: ids.slice(0, maxTargets), overflow: ids.length > maxTargets }
-}
-
-function resolveCurrentVoiceInfo(userId: string, voiceStore: any, channelStore: any) {
-    const call = (name: string, ...args: any[]) => {
-        try {
-            const fn = voiceStore?.[name]
-            return typeof fn === 'function' ? fn.apply(voiceStore, args) : undefined
-        } catch { return undefined }
-    }
-    const toInfo = (rawChannelId: any, rawGuildId: any) => {
-        if (rawChannelId == null || rawGuildId == null || String(rawChannelId).length === 0) return null
-        const channelId = String(rawChannelId)
-        let channel: any = null
-        try { channel = channelStore?.getChannel?.(channelId) ?? null } catch {}
-        return { channelId, guildId: String(rawGuildId), channel }
-    }
-    let all: any
-    const guildIds: string[] = []
-    try {
-        all = call('getAllVoiceStates')
-        if (all instanceof Map) guildIds.push(...Array.from(all.keys(), value => String(value)))
-        else if (all && typeof all === 'object') guildIds.push(...Object.keys(all))
-    } catch {}
-    for (const guildId of guildIds) {
-        if (guildId === '@me') continue
-        const active = toInfo(call('getCurrentClientVoiceChannelId', guildId), guildId)
-        if (active) return active
-        const own = toInfo(call('getUserVoiceChannelId', guildId, userId), guildId)
-        if (own) return own
-        const state = call('getVoiceState', guildId, userId) ??
-            (all instanceof Map ? all.get(guildId)?.[userId] : all?.[guildId]?.[userId])
-        const info = toInfo(state?.channelId ?? state?.channel_id,
-            state?.guildId ?? state?.guild_id ?? guildId)
-        if (info) return info
-    }
-    const ownState = call('getVoiceStateForUser', userId)
-    const ownInfo = toInfo(ownState?.channelId ?? ownState?.channel_id,
-        ownState?.guildId ?? ownState?.guild_id)
-    return ownInfo ?? { channelId: null, guildId: null, channel: null }
-}
 const POLL_INTERVAL_MS = 500
 const ACTION_SPACING_MS = 250
 
@@ -104,13 +62,18 @@ export default plugin<{ jsonStorage: BlockSettings }>({
         let http: any = null
         let lastStatus = ''
         const presence = new Map<string, boolean>()
+        let lastTargetsSignature = ''
         const running = new Set<string>()
         const commands: Array<() => void> = []
 
         const status = (message: string) => {
             if (lastStatus === message) return
             lastStatus = message
-            void jsonStorage.set({ status: message })
+            try {
+                void jsonStorage.set({ status: message })
+            } catch (error) {
+                logger?.error?.('[Block] Could not save status', error)
+            }
             logger?.log?.('[Block]', message)
         }
 
@@ -129,56 +92,8 @@ export default plugin<{ jsonStorage: BlockSettings }>({
             } catch { return null }
         }
 
-        const voiceInfo = (userId: string, preferredGuildId?: string | null) => {
-            const make = (state: any, guildId: string | null = null) => {
-                if (!state) return { channelId: null, guildId, channel: null }
-                const rawChannelId = state.channelId ?? state.channel_id
-                if (rawChannelId == null) return {
-                    channelId: null,
-                    guildId: guildId ?? state.guildId ?? state.guild_id ?? null,
-                    channel: null,
-                }
-                const channelId = String(rawChannelId)
-                const channel = channelStore?.getChannel?.(channelId) ?? null
-                const rawGuild = guildId ?? state.guildId ?? state.guild_id ?? channel?.guildId ?? channel?.guild_id
-                return { channelId, guildId: rawGuild == null ? null : String(rawGuild), channel }
-            }
-
-            if (preferredGuildId) {
-                try {
-                    const direct = voiceStore?.getVoiceState?.(preferredGuildId, userId)
-                        ?? voiceStore?.getVoiceStates?.(preferredGuildId)?.[userId]
-                        ?? voiceStore?.getAllVoiceStates?.()?.[preferredGuildId]?.[userId]
-                    if (direct) return make(direct, preferredGuildId)
-                } catch (error) {
-                    logger?.error?.('[Block] Preferred guild lookup failed', error)
-                }
-            }
-
-            try {
-                const all = voiceStore?.getAllVoiceStates?.()
-                if (all && typeof all === 'object') {
-                    for (const [guildId, members] of Object.entries(all)) {
-                        if (guildId === '@me' || !members || typeof members !== 'object') continue
-                        const candidate = (members as any)[userId]
-                        if (candidate) return make(candidate, String(guildId))
-                    }
-                }
-            } catch (error) {
-                logger?.error?.('[Block] Voice-state lookup failed', error)
-            }
-
-            try {
-                const state = voiceStore?.getVoiceStateForUser?.(userId)
-                if (state) return make(state)
-            } catch (error) {
-                logger?.error?.('[Block] User voice lookup failed', error)
-            }
-            return { channelId: null, guildId: null, channel: null }
-        }
-
         const schedule = (immediate = false) => {
-            if (stopped || !jsonStorage.cache?.enabled) return
+            if (stopped) return
             if (timer) {
                 if (!immediate) return
                 clearTimeout(timer)
@@ -194,14 +109,11 @@ export default plugin<{ jsonStorage: BlockSettings }>({
             const ownId = currentUserId()
             if (!ownId || !permissionStore || !http || !channel) return
             const own = resolveCurrentVoiceInfo(ownId, voiceStore, channelStore)
-            const target = voiceInfo(userId, guildId)
+            const target = resolveUserVoiceInfo(userId, guildId, voiceStore, channelStore)
             if (own.guildId !== guildId || own.channelId !== channelId ||
                 target.guildId !== guildId || target.channelId !== channelId) return
 
-            const can = (permission: bigint) => {
-                try { return Boolean(permissionStore?.can?.(permission, channel)) }
-                catch { return false }
-            }
+            const can = (permission: bigint) => hasPermission(permissionStore, permission, channel)
             const results: string[] = []
 
             const apply = async (enabled: boolean, permitted: boolean, label: string, body: Record<string, unknown>) => {
@@ -223,10 +135,13 @@ export default plugin<{ jsonStorage: BlockSettings }>({
                         body,
                     })
                     const responseStatus = Number(response?.status ?? 0)
-                    if (response?.ok === false || responseStatus >= 400) throw new Error('HTTP ' + responseStatus)
+                    if (response?.ok === false || responseStatus >= 400) {
+                        throw new Error(getDiscordErrorMessage(response) || ('HTTP ' + responseStatus))
+                    }
                     results.push(label + ': requested')
                 } catch (error: any) {
-                    results.push(label + ': rejected')
+                    const detail = getDiscordErrorMessage(error)
+                    results.push(label + ': rejected' + (detail ? ' (' + detail + ')' : ''))
                     logger?.warn?.('[Block] Discord rejected ' + label, { userId, guildId, error })
                 }
                 await delay(ACTION_SPACING_MS)
@@ -244,13 +159,32 @@ export default plugin<{ jsonStorage: BlockSettings }>({
         }
 
         async function reconcile() {
-            if (stopped || !jsonStorage.cache?.enabled) return
+            if (stopped) return
             if (checking) { checkAgain = true; return }
             checking = true
             try {
                 const settings = jsonStorage.cache ?? DEFAULT_SETTINGS
-                const ids = parseTargetIds(settings.userIds, MAX_TARGETS).ids
+                if (!settings.enabled) {
+                    presence.clear()
+                    lastTargetsSignature = ''
+                    return
+                }
+
+                const parsed = parseTargetIds(settings.userIds, MAX_TARGETS)
+                const ids = parsed.ids
+                if (parsed.invalid.length) {
+                    status('Invalid saved ID(s): ' + parsed.invalid.slice(0, 3).join(', ') + '. Fix them in Configure.')
+                    return
+                }
+                if (parsed.overflow) {
+                    status('Only the first ' + MAX_TARGETS + ' unique valid IDs can be watched.')
+                }
                 if (!ids.length) { status('Add valid user IDs in Configure or use /block.'); return }
+                const signature = ids.join(':')
+                if (signature !== lastTargetsSignature) {
+                    presence.clear()
+                    lastTargetsSignature = signature
+                }
                 const ownId = currentUserId()
                 if (!ownId) { status('Waiting for your Discord account to load.'); return }
                 const own = resolveCurrentVoiceInfo(ownId, voiceStore, channelStore)
@@ -260,22 +194,27 @@ export default plugin<{ jsonStorage: BlockSettings }>({
                     return
                 }
                 const channel = own.channel ?? channelStore?.getChannel?.(own.channelId)
-                if (!channel || !permissionStore || !http) {
-                    status('Waiting for your voice channel, permissions, and Discord HTTP module.')
+                if (!channel) {
+                    status('Your current voice channel is not available in Discord yet.')
                     return
                 }
-                const prefix = own.guildId + ':' + own.channelId + ':'
-                for (const key of presence.keys()) if (!key.startsWith(prefix)) presence.delete(key)
-                const entrants: string[] = []
-                for (const id of ids) {
-                    if (id === ownId) continue
-                    const target = voiceInfo(id, own.guildId)
-                    const key = prefix + id
-                    const present = target.guildId === own.guildId && target.channelId === own.channelId
-                    const wasPresent = presence.get(key) ?? false
-                    presence.set(key, present)
-                    if (present && !wasPresent) entrants.push(id)
+                if (!permissionStore) {
+                    status('Waiting for Discord PermissionStore to load.')
+                    return
                 }
+                if (!http) {
+                    status('Waiting for Discord HTTP module (HTTP.patch) to load.')
+                    return
+                }
+
+                const watchIds = ids.filter(id => id !== ownId)
+                const entrants = getNewVoiceEntrants(
+                    watchIds,
+                    own.guildId,
+                    own.channelId,
+                    presence,
+                    id => resolveUserVoiceInfo(id, own.guildId, voiceStore, channelStore),
+                )
                 for (const id of entrants) {
                     const key = prefix + id
                     if (running.has(key)) continue
@@ -318,19 +257,12 @@ export default plugin<{ jsonStorage: BlockSettings }>({
                         required: index === 0,
                     })),
                     execute: async (args: any[]) => {
-                        const values = (Array.isArray(args) ? args : [])
-                            .filter((arg: any) => /^id\d+$/.test(String(arg?.name ?? '')))
-                            .map((arg: any) => String(arg?.value ?? '').trim())
-                            .filter((value: string) => value.length > 0)
-                        if (!values.length || values.some((id: string) => !/^\d{15,22}$/.test(id))) {
-                            toast('Enter valid numeric Discord user IDs.', 'critical')
+                        const parsed = parseCommandIds(args, MAX_TARGETS)
+                        if (parsed.error) {
+                            toast(parsed.error, 'critical')
                             return
                         }
-                        const ids = [...new Set(values)]
-                        if (ids.length > MAX_TARGETS) {
-                            toast('You can watch up to ' + MAX_TARGETS + ' user IDs.', 'critical')
-                            return
-                        }
+                        const ids = parsed.ids
                         presence.clear()
                         await jsonStorage.set({
                             userIds: ids.join('\n'),
@@ -405,6 +337,29 @@ export default plugin<{ jsonStorage: BlockSettings }>({
             }
             const text = { color: '#F2F3F5', fontSize: 15, fontWeight: '600' as const }
             const muted = '#B5BAC1'
+            const saveDraft = (enable: boolean) => {
+                const parsed = parseTargetIds(draft, MAX_TARGETS)
+                if (parsed.invalid.length || parsed.overflow || parsed.ids.length === 0) {
+                    ToastActionCreators.open('BLOCK_SETTINGS', {
+                        text: parsed.invalid.length
+                            ? 'Fix invalid Discord user ID(s) before saving.'
+                            : parsed.overflow
+                                ? 'You can save up to ' + MAX_TARGETS + ' unique user IDs.'
+                                : 'Enter at least one valid Discord user ID.',
+                        variant: 'critical',
+                    })
+                    return
+                }
+                const normalized = parsed.ids.join('\n')
+                setDraft(normalized)
+                void api.jsonStorage.set({
+                    userIds: normalized,
+                    ...(enable ? {
+                        enabled: true,
+                        status: 'Armed. Waiting for your active voice channel.',
+                    } : {}),
+                })
+            }
             return (
                 <ScrollView contentContainerStyle={{ padding: 16 }}>
                     <View style={{ gap: 8 }}>
@@ -417,13 +372,11 @@ export default plugin<{ jsonStorage: BlockSettings }>({
                             placeholderTextColor="#72767D" multiline autoCapitalize="none"
                             autoCorrect={false} keyboardType="numeric" textAlignVertical="top"
                             style={{ minHeight: 120, padding: 12, borderRadius: 8, color: '#F2F3F5', backgroundColor: 'rgba(128,128,128,0.16)', fontSize: 15 }} />
-                        <Pressable onPress={() => void api.jsonStorage.set({ userIds: draft.trim() })}
+                        <Pressable onPress={() => saveDraft(false)}
                             style={{ ...button, backgroundColor: '#4E5058' }}>
                             <Text style={text}>Save IDs</Text>
                         </Pressable>
-                        <Pressable onPress={() => {
-                            void api.jsonStorage.set({ userIds: draft.trim(), enabled: true, status: 'Armed. Waiting for your active voice channel.' })
-                        }} style={{ ...button, backgroundColor: '#5865F2' }}>
+                        <Pressable onPress={() => saveDraft(true)} style={{ ...button, backgroundColor: '#5865F2' }}>
                             <Text style={text}>Enable Block</Text>
                         </Pressable>
                         <Pressable onPress={() => {

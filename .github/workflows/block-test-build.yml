@@ -18,6 +18,8 @@ jobs:
         with:
           python-version: "3.x"
       - run: bun install
+      - name: Test Block helpers
+        run: bun test plugins/block/js/helpers.test.ts
       - name: Build Block only
         run: bun --bun run build --plugins-dir plugins block
       - name: Package Valenced install ZIP
@@ -27,7 +29,7 @@ jobs:
       - name: Upload standalone Block ZIP
         uses: actions/upload-artifact@v4
         with:
-          name: block-1.0.0-install-zip
-          path: build/dist/com.lifawaz.block@1.0.0.zip
+          name: block-1.0.1-install-zip
+          path: build/dist/com.lifawaz.block@1.0.1.zip
           if-no-files-found: error
           retention-days: 30
