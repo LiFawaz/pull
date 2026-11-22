@@ -1,6 +1,36 @@
 export const MOVE_MEMBERS = 1n << 24n
 export const CONNECT = 1n << 20n
 
+export const MUTE_MEMBERS = 1n << 22n
+export const DEAFEN_MEMBERS = 1n << 23n
+export const DISCONNECT_MEMBERS = 1n << 24n
+
+export type VoiceModerationPermissions = {
+    mute: boolean
+    deafen: boolean
+    disconnect: boolean
+}
+
+export function getVoiceModerationPermissions(
+    permissionStore: any,
+    channel: any,
+): VoiceModerationPermissions {
+    const can = (permission: bigint) => {
+        try {
+            return Boolean(permissionStore?.can?.(permission, channel))
+        } catch {
+            return false
+        }
+    }
+
+    return {
+        mute: can(MUTE_MEMBERS),
+        deafen: can(DEAFEN_MEMBERS),
+        disconnect: can(DISCONNECT_MEMBERS),
+    }
+}
+
+
 export type TargetIds = { ids: string[]; overflow: boolean }
 export type VoiceCapacity = { occupancy: number; reserved: number; limit: number; available: number; isFull: boolean } | null
 
