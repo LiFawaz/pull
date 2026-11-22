@@ -4,7 +4,7 @@
   "name": "Block",
   "author": "Li Fawaz (https://github.com/LiFawaz)",
   "description": "Voice-session protection with persistent, permission-gated moderation enforcement.",
-  "version": "1.0.3",
+  "version": "1.0.4",
   "dependencies": {
     "valenced.api": {
       "version": ">=1 <2"
