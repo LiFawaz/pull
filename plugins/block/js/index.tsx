@@ -64,7 +64,7 @@ export default plugin<{ jsonStorage: BlockSettings }>({
         let lastTargetsSignature = ''
         const running = new Set<string>()
         const lastAttempt = new Map<string, number>()
-        const ACTION_RETRY_COOLDOWN_MS = 5000
+        const ACTION_RETRY_COOLDOWN_MS = 30000
         const commands: Array<() => void> = []
 
         const status = (message: string) => {
