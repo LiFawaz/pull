@@ -117,6 +117,30 @@ describe('Block voice-state resolution', () => {
         })
     })
 
+
+    test('resolves the current user from Map-backed guild voice states', () => {
+        const userId = '123456789012345'
+        const channel = { id: 'voice-a', guildId: 'guild-a' }
+        const all = new Map([
+            ['guild-a', new Map([[userId, { channelId: 'voice-a' }]])],
+        ])
+        const voiceStore = {
+            getAllVoiceStates: () => all,
+            getCurrentClientVoiceChannelId: () => undefined,
+            getUserVoiceChannelId: () => undefined,
+            getVoiceState: () => undefined,
+            getVoiceStateForUser: () => undefined,
+        }
+
+        expect(resolveCurrentVoiceInfo(userId, voiceStore, {
+            getChannel: () => channel,
+        })).toEqual({
+            channelId: 'voice-a',
+            guildId: 'guild-a',
+            channel,
+        })
+    })
+
     test('returns disconnected when own user has no current voice state', () => {
         expect(resolveCurrentVoiceInfo('123456789012345', {
             getAllVoiceStates: () => ({
