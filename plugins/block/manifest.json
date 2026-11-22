@@ -3,8 +3,8 @@
   "id": "com.lifawaz.block",
   "name": "Block",
   "author": "Li Fawaz (https://github.com/LiFawaz)",
-  "description": "Voice-session protection with join detection, diagnostic status, and permission-aware moderation attempts.",
-  "version": "1.0.1",
+  "description": "Voice-session protection with persistent, permission-gated moderation enforcement.",
+  "version": "1.0.2",
   "dependencies": {
     "valenced.api": {
       "version": ">=1 <2"
