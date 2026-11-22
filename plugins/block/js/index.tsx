@@ -4,7 +4,6 @@ import { Pressable, ScrollView, Text, TextInput, View } from 'react-native'
 import { getStore, onAnyFluxEventDispatched } from '@valenced/discord/flux'
 import { getModules } from '@valenced/modules/finders'
 import { withProps } from '@valenced/modules/finders/filters'
-import { resolveCurrentVoiceInfo, parseTargetIds } from '../pull/js/helpers'
 
 interface BlockSettings {
     userIds: string
@@ -25,6 +24,58 @@ const DEFAULT_SETTINGS: BlockSettings = {
 }
 
 const MAX_TARGETS = 20
+
+function parseTargetIds(value: unknown, maxTargets: number) {
+    const parts = String(value ?? '').split(/[\\s,;]+/)
+    const ids: string[] = []
+    const seen = new Set<string>()
+    for (const part of parts) {
+        const id = part.trim()
+        if (!/^\\d{15,22}$/.test(id) || seen.has(id)) continue
+        seen.add(id)
+        ids.push(id)
+    }
+    return { ids: ids.slice(0, maxTargets), overflow: ids.length > maxTargets }
+}
+
+function resolveCurrentVoiceInfo(userId: string, voiceStore: any, channelStore: any) {
+    const call = (name: string, ...args: any[]) => {
+        try {
+            const fn = voiceStore?.[name]
+            return typeof fn === 'function' ? fn.apply(voiceStore, args) : undefined
+        } catch { return undefined }
+    }
+    const toInfo = (rawChannelId: any, rawGuildId: any) => {
+        if (rawChannelId == null || rawGuildId == null || String(rawChannelId).length === 0) return null
+        const channelId = String(rawChannelId)
+        let channel: any = null
+        try { channel = channelStore?.getChannel?.(channelId) ?? null } catch {}
+        return { channelId, guildId: String(rawGuildId), channel }
+    }
+    let all: any
+    const guildIds: string[] = []
+    try {
+        all = call('getAllVoiceStates')
+        if (all instanceof Map) guildIds.push(...Array.from(all.keys(), value => String(value)))
+        else if (all && typeof all === 'object') guildIds.push(...Object.keys(all))
+    } catch {}
+    for (const guildId of guildIds) {
+        if (guildId === '@me') continue
+        const active = toInfo(call('getCurrentClientVoiceChannelId', guildId), guildId)
+        if (active) return active
+        const own = toInfo(call('getUserVoiceChannelId', guildId, userId), guildId)
+        if (own) return own
+        const state = call('getVoiceState', guildId, userId) ??
+            (all instanceof Map ? all.get(guildId)?.[userId] : all?.[guildId]?.[userId])
+        const info = toInfo(state?.channelId ?? state?.channel_id,
+            state?.guildId ?? state?.guild_id ?? guildId)
+        if (info) return info
+    }
+    const ownState = call('getVoiceStateForUser', userId)
+    const ownInfo = toInfo(ownState?.channelId ?? ownState?.channel_id,
+        ownState?.guildId ?? ownState?.guild_id)
+    return ownInfo ?? { channelId: null, guildId: null, channel: null }
+}
 const POLL_INTERVAL_MS = 500
 const ACTION_SPACING_MS = 250
 
