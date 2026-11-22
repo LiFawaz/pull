@@ -107,21 +107,17 @@ export default plugin<{ jsonStorage: BlockSettings }>({
         const action = async (userId: string, guildId: string, channelId: string, channel: any) => {
             const settings = jsonStorage.cache ?? DEFAULT_SETTINGS
             const ownId = currentUserId()
-            if (!ownId || !permissionStore || !http || !channel) return
+            if (!ownId || !http || !channel) return
             const own = resolveCurrentVoiceInfo(ownId, voiceStore, channelStore)
             const target = resolveUserVoiceInfo(userId, guildId, voiceStore, channelStore)
             if (own.guildId !== guildId || own.channelId !== channelId ||
                 target.guildId !== guildId || target.channelId !== channelId) return
 
-            const can = (permission: bigint) => hasPermission(permissionStore, permission, channel)
             const results: string[] = []
 
-            const apply = async (enabled: boolean, permitted: boolean, label: string, body: Record<string, unknown>) => {
+            const apply = async (enabled: boolean, permission: bigint, label: string, body: Record<string, unknown>) => {
                 if (!enabled) return
-                if (!permitted) {
-                    results.push(label + ': missing permission')
-                    return
-                }
+                const localPermissionCheck = hasPermission(permissionStore, permission, channel)
                 const currentOwn = resolveCurrentVoiceInfo(ownId, voiceStore, channelStore)
                 const currentTarget = resolveUserVoiceInfo(userId, guildId, voiceStore, channelStore)
                 if (currentOwn.guildId !== guildId || currentOwn.channelId !== channelId ||
@@ -138,18 +134,21 @@ export default plugin<{ jsonStorage: BlockSettings }>({
                     if (response?.ok === false || responseStatus >= 400) {
                         throw new Error(getDiscordErrorMessage(response) || ('HTTP ' + responseStatus))
                     }
-                    results.push(label + ': requested')
+                    results.push(label + ': accepted by Discord')
                 } catch (error: any) {
                     const detail = getDiscordErrorMessage(error)
-                    results.push(label + ': rejected' + (detail ? ' (' + detail + ')' : ''))
+                    const localNote = permissionStore && !localPermissionCheck
+                        ? ' (the local permission check was negative too)'
+                        : ''
+                    results.push(label + ': rejected' + (detail ? ' (' + detail + ')' : '') + localNote)
                     logger?.warn?.('[Block] Discord rejected ' + label, { userId, guildId, error })
                 }
                 await delay(ACTION_SPACING_MS)
             }
 
-            await apply(settings.mute !== false, can(MUTE_MEMBERS), 'Server mute', { mute: true })
-            await apply(settings.deafen !== false, can(DEAFEN_MEMBERS), 'Server deafen', { deaf: true })
-            await apply(settings.disconnect !== false, can(MOVE_MEMBERS), 'Disconnect', { channel_id: null })
+            await apply(settings.mute !== false, MUTE_MEMBERS, 'Server mute', { mute: true })
+            await apply(settings.deafen !== false, DEAFEN_MEMBERS, 'Server deafen', { deaf: true })
+            await apply(settings.disconnect !== false, MOVE_MEMBERS, 'Disconnect', { channel_id: null })
 
             if (results.length) {
                 const summary = userId + ': ' + results.join('; ')
@@ -196,10 +195,6 @@ export default plugin<{ jsonStorage: BlockSettings }>({
                 const channel = own.channel ?? channelStore?.getChannel?.(own.channelId)
                 if (!channel) {
                     status('Your current voice channel is not available in Discord yet.')
-                    return
-                }
-                if (!permissionStore) {
-                    status('Waiting for Discord PermissionStore to load.')
                     return
                 }
                 if (!http) {
