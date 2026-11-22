@@ -405,6 +405,203 @@ export default plugin<{ jsonStorage: PullSettings }>({
             return info
         }
 
+        function scheduleBlockCheck(immediate = false) {
+            if (stopped || !jsonStorage.cache?.blockEnabled) return
+            if (blockCheckTimer) {
+                if (!immediate) return
+                clearTimeout(blockCheckTimer)
+            }
+            blockCheckTimer = setTimeout(() => {
+                blockCheckTimer = null
+                void reconcileBlock()
+            }, immediate ? 0 : 120)
+        }
+
+        async function performBlockAction(
+            targetId: string,
+            guildId: string,
+            channelId: string,
+            channel: any,
+        ) {
+            const settings = jsonStorage.cache ?? DEFAULT_SETTINGS
+            if (!settings.blockEnabled) return
+            if (!permissionStore || !restApi || !channel) {
+                blockStatus('Waiting for Discord permissions and HTTP modules to load.')
+                return
+            }
+
+            const ownId = getCurrentUserId()
+            if (!ownId) return
+            const ownVoice = getCurrentVoiceInfo(ownId)
+            if (ownVoice.guildId !== guildId || ownVoice.channelId !== channelId) return
+
+            const targetVoice = getVoiceInfo(targetId, guildId)
+            if (targetVoice.guildId !== guildId || targetVoice.channelId !== channelId) return
+
+            const allowed = getVoiceModerationPermissions(permissionStore, channel)
+            const outcomes: string[] = []
+
+            const sendAction = async (
+                enabled: boolean,
+                permitted: boolean,
+                label: string,
+                body: Record<string, unknown>,
+            ) => {
+                if (!enabled) return
+                if (!permitted) {
+                    outcomes.push(label + ': unavailable (missing permission)')
+                    return
+                }
+
+                const currentOwnVoice = getCurrentVoiceInfo(ownId)
+                const currentTargetVoice = getVoiceInfo(targetId, guildId)
+                if (
+                    currentOwnVoice.guildId !== guildId ||
+                    currentOwnVoice.channelId !== channelId ||
+                    currentTargetVoice.guildId !== guildId ||
+                    currentTargetVoice.channelId !== channelId
+                ) {
+                    outcomes.push(label + ': skipped because the voice session changed')
+                    return
+                }
+
+                try {
+                    const response = await restApi.patch({
+                        url: '/guilds/' + guildId + '/members/' + targetId,
+                        body,
+                    })
+                    const responseStatus = Number(response?.status ?? 0)
+                    if (response?.ok === false || responseStatus >= 400) {
+                        throw new Error('Discord HTTP PATCH failed with status ' + (responseStatus || 'unknown') + '.')
+                    }
+                    outcomes.push(label + ': applied')
+                } catch (error: any) {
+                    const bodyResult = getResponseBody(error)
+                    const code = Number(bodyResult?.code ?? error?.body?.code ?? 0)
+                    const message = String(bodyResult?.message ?? error?.message ?? 'unknown Discord error')
+                    outcomes.push(label + ': rejected' + (code ? ' (code ' + code + ')' : ''))
+                    logger?.warn?.('[Block] Discord rejected a moderation action', {
+                        targetId,
+                        guildId,
+                        channelId,
+                        label,
+                        message,
+                        error,
+                    })
+                }
+                await delay(BLOCK_ACTION_SPACING_MS)
+            }
+
+            // Check and send each action independently; a missing permission
+            // for one action must not suppress the other permitted actions.
+            await sendAction(settings.blockMute !== false, allowed.mute, 'Server mute', { mute: true })
+            await sendAction(settings.blockDeafen !== false, allowed.deafen, 'Server deafen', { deaf: true })
+            await sendAction(settings.blockDisconnect !== false, allowed.disconnect, 'Voice disconnect', { channel_id: null })
+
+            if (!outcomes.length) {
+                blockStatus('All Block actions are disabled in Configure.')
+                return
+            }
+
+            const summary = 'User ' + targetId + ': ' + outcomes.join('; ') + '.'
+            blockStatus(summary)
+            try {
+                ToastActionCreators.open('BLOCK_ACTION', {
+                    text: '[Block] ' + summary,
+                    variant: outcomes.some(value => value.includes('rejected')) ? 'critical' : 'default',
+                })
+            } catch (error) {
+                logger?.error?.('[Block] Could not show action feedback', error)
+            }
+        }
+
+        async function reconcileBlock() {
+            if (stopped || !jsonStorage.cache?.blockEnabled) return
+            if (blockChecking) {
+                blockCheckAgain = true
+                return
+            }
+
+            blockChecking = true
+            try {
+                const settings = jsonStorage.cache ?? DEFAULT_SETTINGS
+                const parsed = parseTargetIds(settings.blockUserIds, MAX_TARGETS)
+                if (!parsed.ids.length) {
+                    blockStatus('Add valid Discord user IDs in Block Configure or use /block.')
+                    return
+                }
+
+                const ownId = getCurrentUserId()
+                if (!ownId) {
+                    blockStatus('Waiting for your Discord account to load.')
+                    return
+                }
+
+                const ownVoice = getCurrentVoiceInfo(ownId)
+                if (!ownVoice.guildId || !ownVoice.channelId) {
+                    clearBlockRuntimeState()
+                    blockStatus('Block is armed and waiting for you to join a voice channel. It resumes automatically.')
+                    return
+                }
+
+                const channel = ownVoice.channel ?? channelStore?.getChannel?.(ownVoice.channelId)
+                if (!channel) {
+                    blockStatus('Waiting for your current voice channel to load.')
+                    return
+                }
+
+                if (!permissionStore || !restApi) {
+                    blockStatus('Waiting for Discord permission and HTTP modules.')
+                    return
+                }
+
+                const prefix = ownVoice.guildId + ':' + ownVoice.channelId + ':'
+                for (const key of blockPresence.keys()) {
+                    if (!key.startsWith(prefix)) blockPresence.delete(key)
+                }
+
+                const jobs: string[] = []
+                for (const targetId of parsed.ids) {
+                    if (targetId === ownId) continue
+                    const target = getVoiceInfo(targetId, ownVoice.guildId)
+                    const key = prefix + targetId
+                    const present = target.guildId === ownVoice.guildId && target.channelId === ownVoice.channelId
+                    const wasPresent = blockPresence.get(key) ?? false
+                    blockPresence.set(key, present)
+                    if (present && !wasPresent) jobs.push(targetId)
+                }
+
+                if (!jobs.length) {
+                    blockStatus('Watching ' + parsed.ids.length + ' selected user(s) in your current voice channel.')
+                    return
+                }
+
+                for (const targetId of jobs) {
+                    if (stopped || !jsonStorage.cache?.blockEnabled) break
+                    const key = prefix + targetId
+                    if (blockRunning.has(key)) continue
+                    blockRunning.add(key)
+                    try {
+                        await performBlockAction(targetId, ownVoice.guildId, ownVoice.channelId, channel)
+                    } finally {
+                        blockRunning.delete(key)
+                    }
+                }
+            } catch (error: any) {
+                const message = error instanceof Error ? error.message : String(error ?? 'Unknown error')
+                logger?.error?.('[Block] Voice protection check failed', error)
+                blockStatus('Block check failed: ' + message + '. See Debug Logs.')
+            } finally {
+                blockChecking = false
+                if (blockCheckAgain) {
+                    blockCheckAgain = false
+                    scheduleBlockCheck(true)
+                }
+            }
+        }
+
+
+
         function getDestinationCapacity(channel: any, guildId: string, channelId: string) {
             try {
                 const all = voiceStore?.getAllVoiceStates?.()
