@@ -180,6 +180,7 @@ export default plugin<{ jsonStorage: BlockSettings }>({
                     lastTargetsSignature = ''
                     lastVoiceSession = ''
                     retryAt.clear()
+                    pendingSuccess.clear()
                     return
                 }
 
@@ -207,6 +208,7 @@ export default plugin<{ jsonStorage: BlockSettings }>({
                     presence.clear()
                     lastVoiceSession = ''
                     retryAt.clear()
+                    pendingSuccess.clear()
                     status('Armed. Waiting for you to join voice; protection resumes automatically.')
                     return
                 }
@@ -214,7 +216,6 @@ export default plugin<{ jsonStorage: BlockSettings }>({
                 if (voiceSession !== lastVoiceSession) {
                     presence.clear()
                     retryAt.clear()
-                    pendingSuccess.clear()
                     pendingSuccess.clear()
                     lastVoiceSession = voiceSession
                 }
