@@ -11,6 +11,8 @@ import {
     parseTargetIds,
     resolveCurrentVoiceInfo,
     resolveUserVoiceInfo,
+    resolveVoiceState,
+    needsVoiceEnforcement,
 } from './helpers'
 
 interface BlockSettings {
@@ -62,6 +64,7 @@ export default plugin<{ jsonStorage: BlockSettings }>({
         let lastStatus = ''
         const presence = new Map<string, boolean>()
         let lastTargetsSignature = ''
+        let lastVoiceSession = ''
         const running = new Set<string>()
         const lastAttempt = new Map<string, number>()
         const ACTION_RETRY_COOLDOWN_MS = 30000
@@ -107,16 +110,6 @@ export default plugin<{ jsonStorage: BlockSettings }>({
                 target.guildId !== guildId || target.channelId !== channelId) return
 
             const results: string[] = []
-            const readTargetState = () => {
-                try {
-                    return voiceStore?.getVoiceState?.(guildId, userId)
-                        ?? voiceStore?.getVoiceStates?.(guildId)?.[userId]
-                        ?? voiceStore?.getAllVoiceStates?.()?.[guildId]?.[userId]
-                        ?? null
-                } catch { return null }
-            }
-            const initialState = readTargetState()
-
             const apply = async (
                 enabled: boolean,
                 permission: bigint,
@@ -129,7 +122,6 @@ export default plugin<{ jsonStorage: BlockSettings }>({
                 const attemptKey = guildId + ':' + channelId + ':' + userId + ':' + actionName
                 const last = lastAttempt.get(attemptKey) ?? 0
                 if (Date.now() - last < ACTION_RETRY_COOLDOWN_MS) return
-                lastAttempt.set(attemptKey, Date.now())
                 const localPermissionCheck = hasPermission(permissionStore, permission, channel)
                 const currentOwn = resolveCurrentVoiceInfo(ownId, voiceStore, channelStore)
                 const currentTarget = resolveUserVoiceInfo(userId, guildId, voiceStore, channelStore)
@@ -138,6 +130,7 @@ export default plugin<{ jsonStorage: BlockSettings }>({
                     results.push(label + ': skipped; voice session changed')
                     return
                 }
+                lastAttempt.set(attemptKey, Date.now())
                 try {
                     const response = await http.patch({
                         url: '/guilds/' + guildId + '/members/' + userId,
@@ -159,7 +152,7 @@ export default plugin<{ jsonStorage: BlockSettings }>({
                 await delay(ACTION_SPACING_MS)
             }
 
-            const currentState = readTargetState() ?? initialState
+            const currentState = resolveVoiceState(userId, guildId, voiceStore)
             await apply(settings.mute !== false, MUTE_MEMBERS, 'Server mute', { mute: true }, currentState?.mute !== true, 'mute')
             await apply(settings.deafen !== false, DEAFEN_MEMBERS, 'Server deafen', { deaf: true }, currentState?.deaf !== true, 'deafen')
             await apply(settings.disconnect !== false, MOVE_MEMBERS, 'Disconnect', { channel_id: null }, isEntry, 'disconnect')
@@ -179,6 +172,8 @@ export default plugin<{ jsonStorage: BlockSettings }>({
                 if (!settings.enabled) {
                     presence.clear()
                     lastTargetsSignature = ''
+                    lastVoiceSession = ''
+                    lastAttempt.clear()
                     return
                 }
 
@@ -195,6 +190,7 @@ export default plugin<{ jsonStorage: BlockSettings }>({
                 const signature = ids.join(':')
                 if (signature !== lastTargetsSignature) {
                     presence.clear()
+                    lastAttempt.clear()
                     lastTargetsSignature = signature
                 }
                 const ownId = currentUserId()
@@ -202,8 +198,16 @@ export default plugin<{ jsonStorage: BlockSettings }>({
                 const own = resolveCurrentVoiceInfo(ownId, voiceStore, channelStore)
                 if (!own.guildId || !own.channelId) {
                     presence.clear()
+                    lastVoiceSession = ''
+                    lastAttempt.clear()
                     status('Armed. Waiting for you to join voice; protection resumes automatically.')
                     return
+                }
+                const voiceSession = own.guildId + ':' + own.channelId
+                if (voiceSession !== lastVoiceSession) {
+                    presence.clear()
+                    lastAttempt.clear()
+                    lastVoiceSession = voiceSession
                 }
                 const channel = own.channel ?? channelStore?.getChannel?.(own.channelId)
                 if (!channel) {
@@ -229,17 +233,12 @@ export default plugin<{ jsonStorage: BlockSettings }>({
                     if (target.guildId !== own.guildId || target.channelId !== own.channelId) continue
                     const key = own.guildId + ':' + own.channelId + ':' + id
                     if (running.has(key)) continue
-                    const state = (() => {
-                        try {
-                            return voiceStore?.getVoiceState?.(own.guildId, id)
-                                ?? voiceStore?.getVoiceStates?.(own.guildId)?.[id]
-                                ?? voiceStore?.getAllVoiceStates?.()?.[own.guildId]?.[id]
-                                ?? null
-                        } catch { return null }
-                    })()
-                    const needsEnforcement =
-                        (settings.mute !== false && state?.mute !== true) ||
-                        (settings.deafen !== false && state?.deaf !== true)
+                    const state = resolveVoiceState(id, own.guildId, voiceStore)
+                    const needsEnforcement = needsVoiceEnforcement(
+                        state,
+                        settings.mute !== false,
+                        settings.deafen !== false,
+                    )
                     if (!entrantSet.has(id) && !needsEnforcement) continue
                     running.add(key)
                     try { await action(id, own.guildId, own.channelId, channel, entrantSet.has(id)) }
@@ -345,6 +344,7 @@ export default plugin<{ jsonStorage: BlockSettings }>({
                 presence.clear()
                 running.clear()
                 lastAttempt.clear()
+                lastVoiceSession = ''
             },
         )
     },
