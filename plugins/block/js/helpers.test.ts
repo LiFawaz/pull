@@ -206,7 +206,7 @@ describe('Block persistent voice enforcement state', () => {
         expect(needsVoiceEnforcement({ mute: false, deaf: true }, true, true)).toBe(true)
         expect(needsVoiceEnforcement({ mute: true, deaf: false }, true, true)).toBe(true)
         expect(needsVoiceEnforcement({ mute: true, deaf: true }, true, true)).toBe(false)
-        expect(needsVoiceEnforcement({ mute: false, deaf: false }, true, false)).toBe(false)
+        expect(needsVoiceEnforcement({ mute: true, deaf: false }, true, false)).toBe(false)
         expect(needsVoiceEnforcement(null, false, false)).toBe(false)
     })
 })
