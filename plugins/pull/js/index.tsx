@@ -1146,10 +1146,15 @@ export default plugin<{ jsonStorage: PullSettings }>({
     SettingsComponent({ api }) {
         const settings = api.jsonStorage.use() ?? DEFAULT_SETTINGS
         const [draft, setDraft] = React.useState(String(settings.userIds ?? ''))
+        const [blockDraft, setBlockDraft] = React.useState(String(settings.blockUserIds ?? ''))
 
         React.useEffect(() => {
             setDraft(String(settings.userIds ?? ''))
         }, [settings.userIds])
+
+        React.useEffect(() => {
+            setBlockDraft(String(settings.blockUserIds ?? ''))
+        }, [settings.blockUserIds])
 
         const enabled = Boolean(settings.enabled)
         const statusText = String(settings.status ?? 'Pull is stopped.')
@@ -1251,6 +1256,113 @@ export default plugin<{ jsonStorage: PullSettings }>({
                         Pull only acts on IDs you enter and only within the same server. It checks your active
                         account's Move Members and destination Connect permissions. It waits for available channel
                         capacity and confirms each move through Discord voice state.
+                    </Text>
+
+                    <View style={{ height: 1, backgroundColor: 'rgba(128,128,128,0.28)', marginVertical: 18 }} />
+
+                    <Text style={{ color: textColor, fontSize: 21, fontWeight: '700' }}>
+                        Block
+                    </Text>
+                    <Text style={{ color: mutedColor, fontSize: 14 }}>
+                        Add user IDs to watch your active voice channel across servers. When a listed user joins
+                        the same channel as you, Block independently attempts the enabled server mute, server
+                        deafen, and voice disconnect actions that Discord permits. It pauses when you leave voice
+                        and resumes when you join again. Disconnecting does not permanently ban someone from a server.
+                    </Text>
+
+                    <TextInput
+                        value={blockDraft}
+                        onChangeText={setBlockDraft}
+                        placeholder={'123456789012345678\n234567890123456789'}
+                        placeholderTextColor="#72767D"
+                        multiline
+                        autoCapitalize="none"
+                        autoCorrect={false}
+                        keyboardType="numeric"
+                        textAlignVertical="top"
+                        style={{
+                            minHeight: 110,
+                            padding: 12,
+                            borderRadius: 8,
+                            color: textColor,
+                            backgroundColor: 'rgba(128,128,128,0.16)',
+                            fontSize: 15,
+                            marginTop: 8,
+                        }}
+                    />
+
+                    <Pressable
+                        onPress={() => void api.jsonStorage.set({ blockUserIds: blockDraft.trim() })}
+                        style={{ ...buttonStyle, backgroundColor: '#4E5058' }}
+                        accessibilityRole="button"
+                    >
+                        <Text style={buttonTextStyle}>Save Block IDs</Text>
+                    </Pressable>
+
+                    <Pressable
+                        onPress={() => {
+                            activeResetBlockRuntimeState?.()
+                            void api.jsonStorage.set({
+                                blockUserIds: blockDraft.trim(),
+                                blockEnabled: true,
+                                blockStatus: 'Block is armed and waiting for your active voice channel.',
+                            })
+                        }}
+                        style={{ ...buttonStyle, backgroundColor: '#5865F2' }}
+                        accessibilityRole="button"
+                    >
+                        <Text style={buttonTextStyle}>Enable Block</Text>
+                    </Pressable>
+
+                    <Pressable
+                        onPress={() => {
+                            activeResetBlockRuntimeState?.()
+                            void api.jsonStorage.set({
+                                blockEnabled: false,
+                                blockStatus: 'Block is paused. Saved IDs are kept.',
+                            })
+                        }}
+                        style={{ ...buttonStyle, backgroundColor: '#4E5058' }}
+                        accessibilityRole="button"
+                    >
+                        <Text style={buttonTextStyle}>Pause Block</Text>
+                    </Pressable>
+
+                    <Text style={{ color: textColor, fontSize: 16, fontWeight: '700', marginTop: 12 }}>
+                        Configure actions
+                    </Text>
+                    <Pressable
+                        onPress={() => void api.jsonStorage.set({ blockMute: !(settings.blockMute ?? true) })}
+                        style={{ ...buttonStyle, backgroundColor: '#4E5058' }}
+                        accessibilityRole="button"
+                    >
+                        <Text style={buttonTextStyle}>Server mute: {(settings.blockMute ?? true) ? 'ON' : 'OFF'}</Text>
+                    </Pressable>
+                    <Pressable
+                        onPress={() => void api.jsonStorage.set({ blockDeafen: !(settings.blockDeafen ?? true) })}
+                        style={{ ...buttonStyle, backgroundColor: '#4E5058' }}
+                        accessibilityRole="button"
+                    >
+                        <Text style={buttonTextStyle}>Server deafen: {(settings.blockDeafen ?? true) ? 'ON' : 'OFF'}</Text>
+                    </Pressable>
+                    <Pressable
+                        onPress={() => void api.jsonStorage.set({ blockDisconnect: !(settings.blockDisconnect ?? true) })}
+                        style={{ ...buttonStyle, backgroundColor: '#4E5058' }}
+                        accessibilityRole="button"
+                    >
+                        <Text style={buttonTextStyle}>Voice disconnect: {(settings.blockDisconnect ?? true) ? 'ON' : 'OFF'}</Text>
+                    </Pressable>
+
+                    <Text style={{ color: textColor, fontSize: 16, fontWeight: '700', marginTop: 10 }}>
+                        Block status
+                    </Text>
+                    <Text style={{ color: mutedColor, fontSize: 14 }}>
+                        {Boolean(settings.blockEnabled) ? 'Enabled' : 'Paused'} · {String(settings.blockStatus ?? 'Block is stopped.')}
+                    </Text>
+                    <Text style={{ color: mutedColor, fontSize: 12, marginTop: 8 }}>
+                        Each action requires its own Discord permission and may still be rejected by Discord due
+                        to role hierarchy or server rules. This is voice-session protection, not a permanent
+                        voice-channel ban.
                     </Text>
                 </View>
             </ScrollView>
