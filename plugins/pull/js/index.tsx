@@ -653,18 +653,22 @@ export default plugin<{ jsonStorage: PullSettings }>({
         const unsubscribeUserStore = getStore('UserStore', (store: any) => {
             userStore = store
             scheduleReconcile(true)
+            scheduleBlockCheck(true)
         })
         const unsubscribeVoiceStore = getStore('VoiceStateStore', (store: any) => {
             voiceStore = store
             scheduleReconcile(true)
+            scheduleBlockCheck(true)
         })
         const unsubscribeChannelStore = getStore('ChannelStore', (store: any) => {
             channelStore = store
             scheduleReconcile(true)
+            scheduleBlockCheck(true)
         })
         const unsubscribePermissionStore = getStore('PermissionStore', (store: any) => {
             permissionStore = store
             scheduleReconcile(true)
+            scheduleBlockCheck(true)
         })
 
         // Current Discord builds expose authenticated requests through the HTTP module.
@@ -677,6 +681,7 @@ export default plugin<{ jsonStorage: PullSettings }>({
                     restApi = http
                     logger?.log?.('[Pull] Discord HTTP module is ready.')
                     scheduleReconcile(true)
+                    scheduleBlockCheck(true)
                 }
             },
         )
@@ -1099,11 +1104,13 @@ export default plugin<{ jsonStorage: PullSettings }>({
                 type.includes('GUILD_MEMBER_UPDATE')
             ) {
                 scheduleReconcile(true)
+                scheduleBlockCheck(true)
             }
             return payload
         })
 
         pollTimer = setInterval(() => scheduleReconcile(true), POLL_INTERVAL_MS)
+        blockPollTimer = setInterval(() => scheduleBlockCheck(false), BLOCK_POLL_INTERVAL_MS)
         cleanup(
             unsubscribe,
             unsubscribeUserStore,
@@ -1115,20 +1122,25 @@ export default plugin<{ jsonStorage: PullSettings }>({
             () => {
                 stopped = true
                 if (activeResetRuntimeState === clearRetryState) activeResetRuntimeState = null
+                if (activeResetBlockRuntimeState === clearBlockRuntimeState) activeResetBlockRuntimeState = null
                 if (reconcileTimer) clearTimeout(reconcileTimer)
+                if (blockCheckTimer) clearTimeout(blockCheckTimer)
+                if (blockPollTimer) clearInterval(blockPollTimer)
                 reconcileScheduledImmediate = false
                 if (pollTimer) clearInterval(pollTimer)
                 moving.clear()
                 moveHistory.clear()
                 pausedUntil.clear()
                 clearRetryState()
+                clearBlockRuntimeState()
                 globalMoveHistory = []
             },
         )
 
         status(jsonStorage.cache?.enabled ? 'Pull is armed. Checking configured accounts.' : 'Pull is stopped.')
         scheduleReconcile(true)
-        logger?.log?.('Pull started.')
+        scheduleBlockCheck(true)
+        logger?.log?.('Pull + Block started.')
     },
 
     SettingsComponent({ api }) {
