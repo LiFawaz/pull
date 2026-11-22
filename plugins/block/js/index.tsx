@@ -5,6 +5,7 @@ import { getModules } from '@valenced/modules/finders'
 import { withProps } from '@valenced/modules/finders/filters'
 import {
     getDiscordErrorMessage,
+    getDiscordRetryAfterMs,
     getNewVoiceEntrants,
     hasPermission,
     parseCommandIds,
@@ -36,11 +37,6 @@ const DEFAULT_SETTINGS: BlockSettings = {
 const MAX_TARGETS = 20
 
 const POLL_INTERVAL_MS = 500
-const ACTION_SPACING_MS = 250
-
-function delay(ms: number): Promise<void> {
-    return new Promise(resolve => setTimeout(resolve, ms))
-}
 
 const MUTE_MEMBERS = 1n << 22n
 const DEAFEN_MEMBERS = 1n << 23n
@@ -66,10 +62,7 @@ export default plugin<{ jsonStorage: BlockSettings }>({
         let lastTargetsSignature = ''
         let lastVoiceSession = ''
         const running = new Set<string>()
-        const lastAttempt = new Map<string, number>()
-        const lastFailure = new Map<string, number>()
-        const ACTION_SUCCESS_COOLDOWN_MS = 3000
-        const ACTION_FAILURE_COOLDOWN_MS = 30000
+        const retryAt = new Map<string, number>()
         const commands: Array<() => void> = []
 
         const status = (message: string) => {
@@ -123,10 +116,7 @@ export default plugin<{ jsonStorage: BlockSettings }>({
                 if (!enabled || !shouldRun) return
                 const attemptKey = guildId + ':' + channelId + ':' + userId + ':' + actionName
                 const now = Date.now()
-                const last = lastAttempt.get(attemptKey) ?? 0
-                const failedAt = lastFailure.get(attemptKey) ?? 0
-                if (now - last < ACTION_SUCCESS_COOLDOWN_MS) return
-                if (now - failedAt < ACTION_FAILURE_COOLDOWN_MS) return
+                if (now < (retryAt.get(attemptKey) ?? 0)) return
                 const localPermissionCheck = hasPermission(permissionStore, permission, channel)
                 const currentOwn = resolveCurrentVoiceInfo(ownId, voiceStore, channelStore)
                 const currentTarget = resolveUserVoiceInfo(userId, guildId, voiceStore, channelStore)
@@ -135,7 +125,6 @@ export default plugin<{ jsonStorage: BlockSettings }>({
                     results.push(label + ': skipped; voice session changed')
                     return
                 }
-                lastAttempt.set(attemptKey, Date.now())
                 try {
                     const response = await http.patch({
                         url: '/guilds/' + guildId + '/members/' + userId,
@@ -143,12 +132,16 @@ export default plugin<{ jsonStorage: BlockSettings }>({
                     })
                     const responseStatus = Number(response?.status ?? 0)
                     if (response?.ok === false || responseStatus >= 400) {
-                        throw new Error(getDiscordErrorMessage(response) || ('HTTP ' + responseStatus))
+                        const rejection: any = new Error(getDiscordErrorMessage(response) || ('HTTP ' + responseStatus))
+                        rejection.response = response
+                        throw rejection
                     }
-                    lastFailure.delete(attemptKey)
+                    retryAt.delete(attemptKey)
                     results.push(label + ': accepted by Discord')
                 } catch (error: any) {
-                    lastFailure.set(attemptKey, Date.now())
+                    const retryAfterMs = getDiscordRetryAfterMs(error)
+                    if (retryAfterMs > 0) retryAt.set(attemptKey, Date.now() + retryAfterMs)
+                    else retryAt.delete(attemptKey)
                     const detail = getDiscordErrorMessage(error)
                     const localNote = permissionStore && !localPermissionCheck
                         ? ' (the local permission check was negative too)'
@@ -156,7 +149,6 @@ export default plugin<{ jsonStorage: BlockSettings }>({
                     results.push(label + ': rejected' + (detail ? ' (' + detail + ')' : '') + localNote)
                     logger?.warn?.('[Block] Discord rejected ' + label, { userId, guildId, error })
                 }
-                await delay(ACTION_SPACING_MS)
             }
 
             const currentState = resolveVoiceState(userId, guildId, voiceStore)
@@ -180,8 +172,7 @@ export default plugin<{ jsonStorage: BlockSettings }>({
                     presence.clear()
                     lastTargetsSignature = ''
                     lastVoiceSession = ''
-                    lastAttempt.clear()
-                    lastFailure.clear()
+                    retryAt.clear()
                     return
                 }
 
@@ -198,8 +189,8 @@ export default plugin<{ jsonStorage: BlockSettings }>({
                 const signature = ids.join(':')
                 if (signature !== lastTargetsSignature) {
                     presence.clear()
-                    lastAttempt.clear()
-                    lastFailure.clear()
+                    retryAt.clear()
+                    retryAt.clear()
                     lastTargetsSignature = signature
                 }
                 const ownId = currentUserId()
@@ -208,15 +199,15 @@ export default plugin<{ jsonStorage: BlockSettings }>({
                 if (!own.guildId || !own.channelId) {
                     presence.clear()
                     lastVoiceSession = ''
-                    lastAttempt.clear()
+                    retryAt.clear()
                     status('Armed. Waiting for you to join voice; protection resumes automatically.')
                     return
                 }
                 const voiceSession = own.guildId + ':' + own.channelId
                 if (voiceSession !== lastVoiceSession) {
                     presence.clear()
-                    lastAttempt.clear()
-                    lastFailure.clear()
+                    retryAt.clear()
+                    retryAt.clear()
                     lastVoiceSession = voiceSession
                 }
                 const channel = own.channel ?? channelStore?.getChannel?.(own.channelId)
@@ -353,8 +344,7 @@ export default plugin<{ jsonStorage: BlockSettings }>({
                 if (poll) clearInterval(poll)
                 presence.clear()
                 running.clear()
-                lastAttempt.clear()
-                lastFailure.clear()
+                retryAt.clear()
                 lastVoiceSession = ''
             },
         )
