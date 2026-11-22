@@ -9,3 +9,5 @@ Block watches only the voice channel your active account is currently connected 
 Server mute requires Mute Members, server deafen requires Deafen Members, and disconnect requires Move Members. Discord can still reject an action because of role hierarchy or server rules. Disconnect is not a permanent ban and does not prevent the user from joining again.
 
 This test build is on branch `build/block-standalone-test`. It does not alter main.
+
+Standalone source: `plugins/block/js/index.tsx`. No Pull source or runtime dependency is bundled.
