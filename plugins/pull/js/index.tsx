@@ -276,7 +276,7 @@ export default plugin<{ jsonStorage: PullSettings }>({
                         }
                         clearBlockRuntimeState()
                         await jsonStorage.set({
-                            blockUserIds: ids.join('\\n'),
+                            blockUserIds: ids.join('\n'),
                             blockEnabled: true,
                             blockStatus: 'Watching ' + ids.length + ' selected user(s) in your active voice channel.',
                         })
@@ -572,7 +572,15 @@ export default plugin<{ jsonStorage: PullSettings }>({
                 }
 
                 if (!jobs.length) {
-                    blockStatus('Watching ' + parsed.ids.length + ' selected user(s) in your current voice channel.')
+                    const currentStatus = String(jsonStorage.cache?.blockStatus ?? '')
+                    if (
+                        !currentStatus ||
+                        currentStatus === 'Block is stopped.' ||
+                        currentStatus.startsWith('Watching ') ||
+                        currentStatus.startsWith('Block is armed')
+                    ) {
+                        blockStatus('Watching ' + parsed.ids.length + ' selected user(s) in your current voice channel.')
+                    }
                     return
                 }
 
