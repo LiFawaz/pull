@@ -1,0 +1,47 @@
+name: Build Pull + Block test ZIP
+
+on:
+  push:
+    branches:
+      - build/pull-plus-block-test
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out test branch
+        uses: actions/checkout@v4
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      - name: Install dependencies
+        run: bun install
+
+      - name: Run helper tests
+        run: bun run test
+
+      - name: Build combined plugin
+        run: bun --bun run build --plugins-dir plugins pull
+
+      - name: Package Valenced install ZIP
+        run: python scripts/package_plugin.py pull
+
+      - name: Verify Valenced install ZIP
+        run: python scripts/check_zip.py pull
+
+      - name: Upload verified install ZIP
+        uses: actions/upload-artifact@v4
+        with:
+          name: pull-plus-block-1.0.17-install-zip
+          path: build/dist/com.lifawaz.pull@1.0.17.zip
+          if-no-files-found: error
+          retention-days: 30
