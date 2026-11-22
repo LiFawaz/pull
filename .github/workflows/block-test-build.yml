@@ -1,0 +1,33 @@
+name: Build standalone Block plugin ZIP
+
+on:
+  push:
+    branches:
+      - build/block-standalone-test
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+      - run: bun install
+      - name: Build Block only
+        run: bun --bun run build --plugins-dir plugins block
+      - name: Package Valenced install ZIP
+        run: python scripts/package_plugin.py block
+      - name: Verify install ZIP
+        run: python scripts/check_zip.py block
+      - name: Upload standalone Block ZIP
+        uses: actions/upload-artifact@v4
+        with:
+          name: block-1.0.0-install-zip
+          path: build/dist/com.lifawaz.block@1.0.0.zip
+          if-no-files-found: error
+          retention-days: 30
