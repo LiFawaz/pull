@@ -1,0 +1,14 @@
+{
+  "format": 1,
+  "id": "com.lifawaz.block",
+  "name": "Block",
+  "author": "Li Fawaz (https://github.com/LiFawaz)",
+  "description": "Automatic voice-session protection with permission-aware server mute, deafen, and disconnect actions.",
+  "version": "1.0.0",
+  "dependencies": {
+    "valenced.api": { "version": ">=1 <2" },
+    "discord": { "version": "*" },
+    "dev.cocobo1.command-lib": { "version": ">=2 <3" }
+  },
+  "dist": { "script": "index.js" }
+}
