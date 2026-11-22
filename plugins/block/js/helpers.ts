@@ -318,3 +318,36 @@ export function needsVoiceEnforcement(
     return (muteEnabled && state?.mute !== true) ||
         (deafenEnabled && state?.deaf !== true)
 }
+
+
+export function getDiscordRetryAfterMs(error: any): number {
+    const response = error?.response ?? error
+    const bodyCandidate =
+        error?.body ??
+        error?.data ??
+        response?.body ??
+        response?.data ??
+        response
+    let body: any = bodyCandidate
+    if (typeof bodyCandidate === 'string') {
+        try { body = JSON.parse(bodyCandidate) } catch { body = null }
+    }
+
+    const retryAfterSeconds = Number(body?.retry_after)
+    if (Number.isFinite(retryAfterSeconds) && retryAfterSeconds > 0) {
+        return Math.ceil(retryAfterSeconds * 1000)
+    }
+
+    try {
+        const headers = response?.headers ?? error?.headers
+        const headerValue = typeof headers?.get === 'function'
+            ? headers.get('retry-after')
+            : headers?.['retry-after'] ?? headers?.['Retry-After']
+        const headerSeconds = Number(headerValue)
+        if (Number.isFinite(headerSeconds) && headerSeconds > 0) {
+            return Math.ceil(headerSeconds * 1000)
+        }
+    } catch {}
+
+    return 0
+}
