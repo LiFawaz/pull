@@ -27,3 +27,5 @@ In Valenced, open Settings > Valenced > Plugins > the settings gear > Install fr
 ## Source and build
 
 This test is built on `build/pull-plus-block-test`. It does not publish to the main branch or repository index. GitHub Actions runs the helper tests, builds the plugin, packages the install ZIP, and verifies the ZIP structure.
+
+The test branch is isolated; the repository main branch remains unchanged.
