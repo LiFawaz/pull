@@ -395,8 +395,7 @@ export default plugin<{ jsonStorage: BlockSettings }>({
         )
     },
 
-    settings: {
-        component: ({ api }) => {
+    SettingsComponent({ api }) {
             const settings = api.jsonStorage.use() ?? DEFAULT_SETTINGS
             const [draft, setDraft] = React.useState(String(settings.userIds ?? ''))
             React.useEffect(() => setDraft(String(settings.userIds ?? '')), [settings.userIds])
@@ -447,6 +446,5 @@ export default plugin<{ jsonStorage: BlockSettings }>({
                     </View>
                 </ScrollView>
             )
-        },
     },
 })
