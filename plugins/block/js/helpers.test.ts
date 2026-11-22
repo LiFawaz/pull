@@ -10,6 +10,8 @@ import {
     parseTargetIds,
     resolveCurrentVoiceInfo,
     resolveUserVoiceInfo,
+    resolveVoiceState,
+    needsVoiceEnforcement,
 } from './helpers'
 
 describe('Block ID parsing', () => {
@@ -170,5 +172,41 @@ describe('Block join detection and permissions', () => {
             status: 403,
             body: { code: 50013, message: 'Missing Permissions' },
         })).toBe('HTTP 403; Discord code 50013; Missing Permissions')
+    })
+})
+
+
+describe('Block persistent voice enforcement state', () => {
+    const userId = '234567890123456'
+    const guildId = 'guild-a'
+
+    test('reads voice state from object-backed stores', () => {
+        const state = { mute: false, deaf: true, channelId: 'voice-a' }
+        expect(resolveVoiceState(userId, guildId, {
+            getAllVoiceStates: () => ({ [guildId]: { [userId]: state } }),
+        })).toBe(state)
+    })
+
+    test('reads voice state from Map-backed stores', () => {
+        const state = { mute: true, deaf: false }
+        expect(resolveVoiceState(userId, guildId, {
+            getAllVoiceStates: () => new Map([[guildId, new Map([[userId, state]])]]),
+        })).toBe(state)
+    })
+
+    test('prefers the direct voice-state getter', () => {
+        const state = { mute: true, deaf: true }
+        expect(resolveVoiceState(userId, guildId, {
+            getVoiceState: () => state,
+            getAllVoiceStates: () => ({}),
+        })).toBe(state)
+    })
+
+    test('re-enforces only actions that are enabled and no longer active', () => {
+        expect(needsVoiceEnforcement({ mute: false, deaf: true }, true, true)).toBe(true)
+        expect(needsVoiceEnforcement({ mute: true, deaf: false }, true, true)).toBe(true)
+        expect(needsVoiceEnforcement({ mute: true, deaf: true }, true, true)).toBe(false)
+        expect(needsVoiceEnforcement({ mute: false, deaf: false }, true, false)).toBe(false)
+        expect(needsVoiceEnforcement(null, false, false)).toBe(false)
     })
 })
