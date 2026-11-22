@@ -63,6 +63,7 @@ export default plugin<{ jsonStorage: BlockSettings }>({
         let lastVoiceSession = ''
         const running = new Set<string>()
         const retryAt = new Map<string, number>()
+        const pendingSuccess = new Set<string>()
         const commands: Array<() => void> = []
 
         const status = (message: string) => {
@@ -117,6 +118,7 @@ export default plugin<{ jsonStorage: BlockSettings }>({
                 const attemptKey = guildId + ':' + channelId + ':' + userId + ':' + actionName
                 const now = Date.now()
                 if (now < (retryAt.get(attemptKey) ?? 0)) return
+                if ((actionName === 'mute' || actionName === 'deafen') && pendingSuccess.has(attemptKey)) return
                 const localPermissionCheck = hasPermission(permissionStore, permission, channel)
                 const currentOwn = resolveCurrentVoiceInfo(ownId, voiceStore, channelStore)
                 const currentTarget = resolveUserVoiceInfo(userId, guildId, voiceStore, channelStore)
@@ -137,6 +139,7 @@ export default plugin<{ jsonStorage: BlockSettings }>({
                         throw rejection
                     }
                     retryAt.delete(attemptKey)
+                    if (actionName === 'mute' || actionName === 'deafen') pendingSuccess.add(attemptKey)
                     results.push(label + ': accepted by Discord')
                 } catch (error: any) {
                     const retryAfterMs = getDiscordRetryAfterMs(error)
@@ -152,6 +155,10 @@ export default plugin<{ jsonStorage: BlockSettings }>({
             }
 
             const currentState = resolveVoiceState(userId, guildId, voiceStore)
+            const muteKey = guildId + ':' + channelId + ':' + userId + ':mute'
+            const deafenKey = guildId + ':' + channelId + ':' + userId + ':deafen'
+            if (currentState?.mute === true || settings.mute === false) pendingSuccess.delete(muteKey)
+            if (currentState?.deaf === true || settings.deafen === false) pendingSuccess.delete(deafenKey)
             await apply(settings.mute !== false, MUTE_MEMBERS, 'Server mute', { mute: true }, currentState?.mute !== true, 'mute')
             await apply(settings.deafen !== false, DEAFEN_MEMBERS, 'Server deafen', { deaf: true }, currentState?.deaf !== true, 'deafen')
             await apply(settings.disconnect !== false, MOVE_MEMBERS, 'Disconnect', { channel_id: null }, isEntry, 'disconnect')
@@ -190,7 +197,7 @@ export default plugin<{ jsonStorage: BlockSettings }>({
                 if (signature !== lastTargetsSignature) {
                     presence.clear()
                     retryAt.clear()
-                    retryAt.clear()
+                    pendingSuccess.clear()
                     lastTargetsSignature = signature
                 }
                 const ownId = currentUserId()
@@ -207,7 +214,8 @@ export default plugin<{ jsonStorage: BlockSettings }>({
                 if (voiceSession !== lastVoiceSession) {
                     presence.clear()
                     retryAt.clear()
-                    retryAt.clear()
+                    pendingSuccess.clear()
+                    pendingSuccess.clear()
                     lastVoiceSession = voiceSession
                 }
                 const channel = own.channel ?? channelStore?.getChannel?.(own.channelId)
@@ -231,7 +239,12 @@ export default plugin<{ jsonStorage: BlockSettings }>({
                 const entrantSet = new Set(entrants)
                 for (const id of watchIds) {
                     const target = resolveUserVoiceInfo(id, own.guildId, voiceStore, channelStore)
-                    if (target.guildId !== own.guildId || target.channelId !== own.channelId) continue
+                    if (target.guildId !== own.guildId || target.channelId !== own.channelId) {
+                        const prefix = own.guildId + ':' + own.channelId + ':' + id + ':'
+                        pendingSuccess.delete(prefix + 'mute')
+                        pendingSuccess.delete(prefix + 'deafen')
+                        continue
+                    }
                     const key = own.guildId + ':' + own.channelId + ':' + id
                     if (running.has(key)) continue
                     const state = resolveVoiceState(id, own.guildId, voiceStore)
@@ -345,6 +358,7 @@ export default plugin<{ jsonStorage: BlockSettings }>({
                 presence.clear()
                 running.clear()
                 retryAt.clear()
+                pendingSuccess.clear()
                 lastVoiceSession = ''
             },
         )
