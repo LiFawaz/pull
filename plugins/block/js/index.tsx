@@ -123,7 +123,7 @@ export default plugin<{ jsonStorage: BlockSettings }>({
                     return
                 }
                 const currentOwn = resolveCurrentVoiceInfo(ownId, voiceStore, channelStore)
-                const currentTarget = voiceInfo(userId, guildId)
+                const currentTarget = resolveUserVoiceInfo(userId, guildId, voiceStore, channelStore)
                 if (currentOwn.guildId !== guildId || currentOwn.channelId !== channelId ||
                     currentTarget.guildId !== guildId || currentTarget.channelId !== channelId) {
                     results.push(label + ': skipped; voice session changed')
