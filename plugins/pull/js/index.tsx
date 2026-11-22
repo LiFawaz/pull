@@ -239,6 +239,72 @@ export default plugin<{ jsonStorage: PullSettings }>({
                         commandToast('All pulling has been stopped.', 'success')
                     },
                 }))
+
+                commandUnsubscribers.push(commandRegistry.registerCommand({
+                    name: 'block',
+                    displayName: 'block',
+                    description: 'Protect your active voice channel from selected users',
+                    displayDescription: 'Watch your active voice channel for selected users',
+                    applicationId: '-1',
+                    inputType: 1,
+                    type: 1,
+                    shouldHide: () => false,
+                    options: Array.from({ length: MAX_TARGETS }, (_, index) => {
+                        const name = 'id' + (index + 1)
+                        return {
+                            name,
+                            displayName: name,
+                            description: 'Discord user ID ' + (index + 1),
+                            displayDescription: 'Enter a Discord user ID to watch',
+                            type: 3,
+                            required: index === 0,
+                        }
+                    }),
+                    execute: async (args: any[]) => {
+                        const values = (Array.isArray(args) ? args : [])
+                            .filter((arg: any) => /^id\\d+$/.test(String(arg?.name ?? '')))
+                            .map((arg: any) => String(arg?.value ?? '').trim())
+                            .filter((value: string) => value.length > 0)
+                        if (!values.length || values.some((id: string) => !/^\\d{15,22}$/.test(id))) {
+                            commandToast('Enter one or more valid numeric Discord user IDs.', 'critical')
+                            return
+                        }
+                        const ids = [...new Set(values)]
+                        if (ids.length > MAX_TARGETS) {
+                            commandToast('You can watch up to ' + MAX_TARGETS + ' different user IDs.', 'critical')
+                            return
+                        }
+                        clearBlockRuntimeState()
+                        await jsonStorage.set({
+                            blockUserIds: ids.join('\\n'),
+                            blockEnabled: true,
+                            blockStatus: 'Watching ' + ids.length + ' selected user(s) in your active voice channel.',
+                        })
+                        blockStatus('Watching ' + ids.length + ' selected user(s) in your active voice channel.')
+                        scheduleBlockCheck(true)
+                        commandToast('Block protection enabled for ' + ids.length + ' user(s).', 'success')
+                    },
+                }))
+
+                commandUnsubscribers.push(commandRegistry.registerCommand({
+                    name: 'unblock',
+                    displayName: 'unblock',
+                    description: 'Pause Block voice protection',
+                    displayDescription: 'Pause Block voice protection',
+                    applicationId: '-1',
+                    inputType: 1,
+                    type: 1,
+                    shouldHide: () => false,
+                    execute: async () => {
+                        clearBlockRuntimeState()
+                        await jsonStorage.set({
+                            blockEnabled: false,
+                            blockStatus: 'Block is paused. Saved IDs are kept.',
+                        })
+                        blockStatus('Block is paused. Saved IDs are kept.')
+                        commandToast('Block protection paused. Saved IDs were kept.', 'success')
+                    },
+                }))
             } catch (error) {
                 logger?.error?.('[Pull] Could not register slash commands', error)
                 status("Slash commands are unavailable. Check that Coco's Command Lib is installed.")
