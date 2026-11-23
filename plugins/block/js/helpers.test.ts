@@ -85,6 +85,46 @@ describe('Block voice-state resolution', () => {
         })
     })
 
+    test('prefers the local phone client channel over a stale selfbot voice state', () => {
+        const userId = '123456789012345'
+        const channel = { id: 'phone-channel', guildId: 'guild-phone' }
+        const voiceStore = {
+            getAllVoiceStates: () => ({
+                'guild-remote': { [userId]: { channelId: 'selfbot-channel' } },
+            }),
+            getCurrentClientVoiceChannelId: () => 'selfbot-channel',
+        }
+        const selectedChannelStore = {
+            getVoiceChannelId: () => 'phone-channel',
+        }
+
+        expect(resolveCurrentVoiceInfo(userId, voiceStore, {
+            getChannel: (id: string) => id === 'phone-channel' ? channel : null,
+        }, selectedChannelStore)).toEqual({
+            channelId: 'phone-channel',
+            guildId: 'guild-phone',
+            channel,
+        })
+    })
+
+    test('does not fall back to a stale remote voice state when the phone is disconnected', () => {
+        const userId = '123456789012345'
+        const voiceStore = {
+            getAllVoiceStates: () => ({
+                'guild-remote': { [userId]: { channelId: 'selfbot-channel' } },
+            }),
+            getCurrentClientVoiceChannelId: () => 'selfbot-channel',
+        }
+
+        expect(resolveCurrentVoiceInfo(userId, voiceStore, {}, {
+            getVoiceChannelId: () => null,
+        })).toEqual({
+            channelId: null,
+            guildId: null,
+            channel: null,
+        })
+    })
+
     test('finds a configured user in the selected guild', () => {
         const channel = { id: 'voice-a', guildId: 'guild-a' }
         const userId = '234567890123456'
