@@ -5,6 +5,7 @@ import {
     MOVE_MEMBERS,
     getDiscordErrorMessage,
     getDiscordRetryAfterMs,
+    getRequiredActions,
     getNewVoiceEntrants,
     hasPermission,
     parseCommandIds,
@@ -239,5 +240,35 @@ describe('Block persistent voice enforcement state', () => {
         expect(needsVoiceEnforcement({ mute: true, deaf: true }, true, true)).toBe(false)
         expect(needsVoiceEnforcement({ mute: true, deaf: false }, true, false)).toBe(false)
         expect(needsVoiceEnforcement(null, false, false)).toBe(false)
+    })
+})
+
+
+describe('Block action planning', () => {
+    test('plans mute, deafen and disconnect independently from actual voice state', () => {
+        expect(getRequiredActions(
+            { mute: false, deaf: false },
+            { mute: true, deafen: true, disconnect: true },
+            true,
+        )).toEqual(['mute', 'deafen', 'disconnect'])
+        expect(getRequiredActions(
+            { mute: true, deaf: false },
+            { mute: true, deafen: true, disconnect: false },
+            true,
+        )).toEqual(['deafen'])
+        expect(getRequiredActions(
+            { mute: false, deaf: false },
+            { mute: false, deafen: false, disconnect: true },
+            true,
+        )).toEqual(['disconnect'])
+    })
+
+    test('does not plan actions for users outside the active channel or missing voice state', () => {
+        expect(getRequiredActions({ mute: false, deaf: false }, {
+            mute: true, deafen: true, disconnect: true,
+        }, false)).toEqual([])
+        expect(getRequiredActions(null, {
+            mute: true, deafen: true, disconnect: true,
+        }, true)).toEqual([])
     })
 })

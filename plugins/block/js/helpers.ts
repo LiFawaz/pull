@@ -270,12 +270,10 @@ export function getDiscordErrorMessage(error: any): string {
         }
     }
 
-    const status = Number(
-        error?.status ??
-        error?.statusCode ??
-        error?.response?.status ??
-        0,
-    )
+    const statusCandidates = [error?.status, error?.statusCode, error?.response?.status]
+        .map(value => Number(value))
+        .filter(value => Number.isFinite(value) && value > 0)
+    const status = statusCandidates[0] ?? 0
     const code = Number(body?.code ?? error?.code ?? 0)
     const message = String(body?.message ?? error?.message ?? '').trim()
 
@@ -350,4 +348,20 @@ export function getDiscordRetryAfterMs(error: any): number {
     } catch {}
 
     return 0
+}
+
+
+export type RequiredVoiceAction = 'mute' | 'deafen' | 'disconnect'
+
+export function getRequiredActions(
+    state: any,
+    settings: { mute?: boolean; deafen?: boolean; disconnect?: boolean },
+    isPresent: boolean,
+): RequiredVoiceAction[] {
+    if (!isPresent || !state) return []
+    const actions: RequiredVoiceAction[] = []
+    if (settings.mute !== false && state.mute !== true) actions.push('mute')
+    if (settings.deafen !== false && state.deaf !== true) actions.push('deafen')
+    if (settings.disconnect !== false) actions.push('disconnect')
+    return actions
 }
