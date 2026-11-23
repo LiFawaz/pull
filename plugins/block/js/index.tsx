@@ -465,19 +465,14 @@ export default plugin<{ jsonStorage: BlockSettings }>({
 
         const unUser = getStore('UserStore', (store: any) => { userStore = store; schedule(true) })
         const unVoice = getStore('VoiceStateStore', (store: any) => { voiceStore = store; schedule(true) })
-        const unSelectedChannel = getModules(withProps('getVoiceChannelId'), (module: any) => {
-            const candidates = [
-                module?.SelectedChannelStore,
-                module?.default?.SelectedChannelStore,
-                module?.default,
-                module,
-            ]
-            const candidate = candidates.find(item => typeof item?.getVoiceChannelId === 'function')
-            if (candidate) {
-                selectedChannelStore = candidate
-                logger?.log?.('[Block] Local SelectedChannelStore is ready.')
-                schedule(true)
+        const unSelectedChannel = getStore('SelectedChannelStore', (store: any) => {
+            if (typeof store?.getVoiceChannelId !== 'function') {
+                logger?.warn?.('[Block] SelectedChannelStore was found but has no getVoiceChannelId method.')
+                return
             }
+            selectedChannelStore = store
+            logger?.log?.('[Block] Local SelectedChannelStore is ready.')
+            schedule(true)
         })
         const unChannel = getStore('ChannelStore', (store: any) => { channelStore = store; schedule(true) })
         const unPermission = getStore('PermissionStore', (store: any) => { permissionStore = store; schedule(true) })
