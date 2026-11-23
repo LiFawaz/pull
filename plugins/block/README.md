@@ -6,7 +6,8 @@ Block is a native Valenced Android plugin for managing selected user IDs in the 
 
 - Stores up to 20 unique Discord user IDs.
 - Detects configured users who are already in your channel and users who join later.
-- Watches the current voice channel only. Switching channels updates the target channel; leaving voice pauses enforcement and joining voice resumes it.
+- Reads the locally connected voice channel from Discord's `SelectedChannelStore.getVoiceChannelId()`. This takes priority over account-wide voice-state caches, so a stale session from another client cannot redirect Block to the wrong channel.
+- Watches the current phone-client voice channel only. Switching channels updates the target channel; leaving voice pauses enforcement and joining voice resumes it.
 - Server Mute, Server Deafen, and Disconnect are independent settings.
 - Reconciles actual voice state so an unmuted or undeafened target is detected again.
 - Checks Mute Members, Deafen Members, and Move Members separately before each corresponding request.
