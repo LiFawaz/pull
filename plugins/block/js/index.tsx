@@ -7,6 +7,7 @@ import {
     getDiscordErrorMessage,
     getDiscordRetryAfterMs,
     getRequiredActions,
+    describePermission,
     hasPermission,
     parseCommandIds,
     parseTargetIds,
@@ -36,8 +37,8 @@ const DEFAULT_SETTINGS: BlockSettings = {
 }
 
 const MAX_TARGETS = 20
-const POLL_INTERVAL_MS = 1000
-const CONFIRMATION_TIMEOUT_MS = 5000
+const POLL_INTERVAL_MS = 250
+const CONFIRMATION_TIMEOUT_MS = 750
 const FALLBACK_RETRY_MS = 1000
 const MUTE_MEMBERS = 1n << 22n
 const DEAFEN_MEMBERS = 1n << 23n
@@ -117,7 +118,7 @@ export default plugin<{ jsonStorage: BlockSettings }>({
             timer = setTimeout(() => {
                 timer = null
                 void reconcile()
-            }, immediate ? 0 : 150)
+            }, immediate ? 0 : 40)
         }
 
         const actionKey = (guildId: string, channelId: string, userId: string, action: ActionName) =>
@@ -365,10 +366,11 @@ export default plugin<{ jsonStorage: BlockSettings }>({
                 }
 
                 const permissionSummary = [
-                    settings.mute !== false ? 'Server Mute: ' + (hasPermission(permissionStore, MUTE_MEMBERS, channel) ? 'available' : 'not available') : 'Server Mute: off',
-                    settings.deafen !== false ? 'Server Deafen: ' + (hasPermission(permissionStore, DEAFEN_MEMBERS, channel) ? 'available' : 'not available') : 'Server Deafen: off',
-                    settings.disconnect !== false ? 'Disconnect: ' + (hasPermission(permissionStore, MOVE_MEMBERS, channel) ? 'available' : 'not available') : 'Disconnect: off',
-                ].join(' | ')
+                    'Permissions in your current voice channel:',
+                    describePermission('Server Mute', settings.mute !== false, hasPermission(permissionStore, MUTE_MEMBERS, channel)),
+                    describePermission('Server Deafen', settings.deafen !== false, hasPermission(permissionStore, DEAFEN_MEMBERS, channel)),
+                    describePermission('Disconnect', settings.disconnect !== false, hasPermission(permissionStore, MOVE_MEMBERS, channel)),
+                ].join('\n')
 
                 const details = [
                     'Current phone-client channel: ' + (channel.name ?? own.channelId) + ' (' + own.channelId + ')',
