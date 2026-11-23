@@ -4,7 +4,7 @@
   "name": "Block",
   "author": "Li Fawaz (https://github.com/LiFawaz)",
   "description": "Permission-aware voice-channel enforcement for configured user IDs, with independent server mute, server deafen, and disconnect controls.",
-  "version": "1.2.1",
+  "version": "1.2.2",
   "dependencies": {
     "valenced.api": {
       "version": ">=1 <2"
