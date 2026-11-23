@@ -128,7 +128,31 @@ export function resolveCurrentVoiceInfo(
     userId: string,
     voiceStore: any,
     channelStore: any,
+    selectedChannelStore?: any,
 ): VoiceInfo {
+    // SelectedChannelStore is the local Discord client's active voice channel.
+    // When supplied, treat it as authoritative and never fall back to another
+    // session's account-wide VoiceStateStore cache.
+    if (selectedChannelStore) {
+        const selectedId = readVoiceStoreMethod(selectedChannelStore, 'getVoiceChannelId')
+        if (selectedId == null || String(selectedId).length === 0) {
+            return { channelId: null, guildId: null, channel: null }
+        }
+
+        const channelId = String(selectedId)
+        let channel: any = null
+        try {
+            channel = channelStore?.getChannel?.(channelId) ?? null
+        } catch {}
+
+        const rawGuildId = channel?.guildId ?? channel?.guild_id ?? null
+        return {
+            channelId,
+            guildId: rawGuildId == null ? null : String(rawGuildId),
+            channel,
+        }
+    }
+
     const all = readVoiceStoreMethod(voiceStore, 'getAllVoiceStates')
     const guildEntries = getGuildEntries(all)
 
