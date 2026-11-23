@@ -13,7 +13,8 @@ Block is a native Valenced Android plugin for managing selected user IDs in the 
 - Checks Mute Members, Deafen Members, and Move Members separately before each corresponding request.
 - Waits for UserStore, VoiceStateStore, ChannelStore, PermissionStore, and Discord's HTTP module.
 - Uses the authenticated Discord HTTP module and handles permission failures and Retry-After responses.
-- Does not treat a successful HTTP response as proof of completion; it waits for the resulting voice state. Pending requests are reconciled after a short confirmation window so stale voice-state snapshots do not trigger rapid duplicate PATCH requests.
+- Uses a 250 ms fallback poll and immediate voice-state event reconciliation. A short 750 ms confirmation guard prevents duplicate requests while Discord's voice state is updating; Discord-provided 429 Retry-After values are always respected.
+- Shows plain-language permission results for Server Mute, Server Deafen, and Disconnect in the current voice channel.
 
 ## Commands
 
