@@ -6,6 +6,7 @@ import {
     getDiscordErrorMessage,
     getDiscordRetryAfterMs,
     getRequiredActions,
+    describePermission,
     getNewVoiceEntrants,
     hasPermission,
     parseCommandIds,
@@ -197,6 +198,18 @@ describe('Block voice-state resolution', () => {
         })
     })
 })
+
+describe('Block permission descriptions', () => {
+    test('explains permissions for the current voice channel in plain language', () => {
+        expect(describePermission('Server Mute', true, true))
+            .toBe('Server Mute: You have permission in the current voice channel')
+        expect(describePermission('Server Deafen', true, false))
+            .toBe('Server Deafen: You do not have permission in the current voice channel')
+        expect(describePermission('Disconnect', false, true))
+            .toBe('Disconnect: Off in settings')
+    })
+})
+
 
 describe('Block join detection and permissions', () => {
     test('fires once on entry, not every poll, then again after leave and rejoin', () => {
