@@ -342,6 +342,18 @@ export function needsVoiceEnforcement(
 }
 
 
+export function describePermission(
+    label: string,
+    enabled: boolean,
+    allowed: boolean,
+): string {
+    if (!enabled) return label + ': Off in settings'
+    return label + (allowed
+        ? ': You have permission in the current voice channel'
+        : ': You do not have permission in the current voice channel')
+}
+
+
 export function getDiscordRetryAfterMs(error: any): number {
     const response = error?.response ?? error
     const bodyCandidate =
