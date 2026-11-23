@@ -31,4 +31,4 @@ python scripts/check_zip.py block
 
 The test suite covers ID validation, object- and Map-backed voice-state lookup, permission-bit separation, retry-after parsing, Discord error extraction, and independent action planning.
 
-Live Discord behavior still requires validation in a test server with the relevant permissions. Discord role hierarchy, server-side permissions, and API rate limits remain authoritative.
+Live Discord behavior still requires validation in a test server with the relevant permissions. The packaged ZIP contains only the Valenced manifest and compiled plugin entry point. Discord role hierarchy, server-side permissions, and API rate limits remain authoritative.
