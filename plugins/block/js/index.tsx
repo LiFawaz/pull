@@ -6,7 +6,6 @@ import { withProps } from '@valenced/modules/finders/filters'
 import {
     getDiscordErrorMessage,
     getDiscordRetryAfterMs,
-    getNewVoiceEntrants,
     getRequiredActions,
     hasPermission,
     parseCommandIds,
@@ -323,6 +322,11 @@ export default plugin<{ jsonStorage: BlockSettings }>({
                 }
 
                 const ids = parsed.ids.filter(id => id !== ownId)
+                const configured = new Set(ids)
+                for (const key of pending.keys()) {
+                    const parts = key.split(':')
+                    if (parts.length >= 4 && !configured.has(parts[2])) pending.delete(key)
+                }
                 const present: string[] = []
                 const diagnostics: string[] = []
                 const tasks: Promise<string>[] = []
@@ -548,7 +552,7 @@ export default plugin<{ jsonStorage: BlockSettings }>({
                 userIds: normalized,
                 ...(enable ? {
                     enabled: true,
-                    status: 'Voice monitor is starting.',
+                    status: 'Block is starting.',
                     targetStatus: 'Waiting for Discord stores and your current voice channel.',
                 } : {}),
             })
@@ -603,7 +607,7 @@ export default plugin<{ jsonStorage: BlockSettings }>({
                         onPress={() => void api.jsonStorage.set({
                             enabled: false,
                             status: 'Block monitor is paused. Saved IDs and settings are kept.',
-                            targetStatus: 'No voice monitoring is running.',
+                            targetStatus: 'No voice-channel enforcement is running.',
                         })}
                         style={{ ...buttonStyle, backgroundColor: '#4E5058' }}
                     >
@@ -668,12 +672,12 @@ export default plugin<{ jsonStorage: BlockSettings }>({
                             {settings.enabled ? 'BLOCK ENABLED' : 'PAUSED'}
                         </Text>
                         <Text style={{ color: muted, fontSize: 13, lineHeight: 19 }}>
-                            {String(settings.status ?? 'Block monitor is paused.')}
+                            {String(settings.status ?? 'Block is paused.')}
                         </Text>
                         <View style={{ height: 1, backgroundColor: 'rgba(255,255,255,0.12)', marginVertical: 4 }} />
                         <Text style={{ color: textColor, fontSize: 14, fontWeight: '700' }}>Target details</Text>
                         <Text selectable style={{ color: muted, fontSize: 12, lineHeight: 18 }}>
-                            {String(settings.targetStatus ?? 'No voice monitoring is running.')}
+                            {String(settings.targetStatus ?? 'No voice-channel enforcement is running.')}
                         </Text>
                     </View>
 

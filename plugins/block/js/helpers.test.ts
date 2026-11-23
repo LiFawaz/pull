@@ -197,12 +197,17 @@ describe('Block join detection and permissions', () => {
         expect(getDiscordRetryAfterMs({ body: { retry_after: 1.25 } })).toBe(1250)
         expect(getDiscordRetryAfterMs({ response: { data: { retry_after: 0.5 } } })).toBe(500)
         expect(getDiscordRetryAfterMs({ body: { message: 'Missing Permissions' } })).toBe(0)
+        expect(getDiscordRetryAfterMs({ response: { headers: { get: (name: string) => name === 'retry-after' ? '2.5' : null } } })).toBe(2500)
     })
 
     test('extracts useful Discord rejection details', () => {
         expect(getDiscordErrorMessage({
             status: 403,
             body: { code: 50013, message: 'Missing Permissions' },
+        })).toBe('HTTP 403; Discord code 50013; Missing Permissions')
+        expect(getDiscordErrorMessage({
+            statusCode: 0,
+            response: { status: 403, data: { code: 50013, message: 'Missing Permissions' } },
         })).toBe('HTTP 403; Discord code 50013; Missing Permissions')
     })
 })
@@ -261,6 +266,19 @@ describe('Block action planning', () => {
             { mute: false, deafen: false, disconnect: true },
             true,
         )).toEqual(['disconnect'])
+    })
+
+    test('reapplies only the states that are no longer active', () => {
+        expect(getRequiredActions(
+            { mute: true, deaf: false },
+            { mute: true, deafen: true, disconnect: true },
+            true,
+        )).toEqual(['deafen', 'disconnect'])
+        expect(getRequiredActions(
+            { mute: true, deaf: true },
+            { mute: false, deafen: false, disconnect: false },
+            true,
+        )).toEqual([])
     })
 
     test('does not plan actions for users outside the active channel or missing voice state', () => {
