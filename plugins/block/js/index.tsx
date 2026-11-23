@@ -74,6 +74,7 @@ export default plugin<{ jsonStorage: BlockSettings }>({
 
         let userStore: any = null
         let voiceStore: any = null
+        let selectedChannelStore: any = null
         let channelStore: any = null
         let permissionStore: any = null
         let http: any = null
@@ -147,7 +148,7 @@ export default plugin<{ jsonStorage: BlockSettings }>({
                 return action + ': waiting for Discord stores or HTTP'
             }
 
-            const own = resolveCurrentVoiceInfo(ownId, voiceStore, channelStore)
+            const own = resolveCurrentVoiceInfo(ownId, voiceStore, channelStore, selectedChannelStore)
             const target = resolveUserVoiceInfo(userId, guildId, voiceStore, channelStore)
             if (own.guildId !== guildId || own.channelId !== channelId ||
                 target.guildId !== guildId || target.channelId !== channelId) {
@@ -287,6 +288,7 @@ export default plugin<{ jsonStorage: BlockSettings }>({
                 const missing: string[] = []
                 if (!userStore) missing.push('UserStore')
                 if (!voiceStore) missing.push('VoiceStateStore')
+                if (!selectedChannelStore) missing.push('SelectedChannelStore (local voice channel)')
                 if (!channelStore) missing.push('ChannelStore')
                 if (!permissionStore) missing.push('PermissionStore')
                 if (!http) missing.push('Discord HTTP')
@@ -369,7 +371,8 @@ export default plugin<{ jsonStorage: BlockSettings }>({
                 ].join(' | ')
 
                 const details = [
-                    'Current channel: ' + (channel.name ?? own.channelId) + ' (' + own.channelId + ')',
+                    'Current phone-client channel: ' + (channel.name ?? own.channelId) + ' (' + own.channelId + ')',
+                    'Channel source: SelectedChannelStore.getVoiceChannelId()',
                     'Blocked IDs in this channel: ' + present.length + (present.length ? ' — ' + present.join(', ') : ''),
                     permissionSummary,
                     ...diagnostics.slice(0, 30),
@@ -462,6 +465,20 @@ export default plugin<{ jsonStorage: BlockSettings }>({
 
         const unUser = getStore('UserStore', (store: any) => { userStore = store; schedule(true) })
         const unVoice = getStore('VoiceStateStore', (store: any) => { voiceStore = store; schedule(true) })
+        const unSelectedChannel = getModules(withProps('getVoiceChannelId'), (module: any) => {
+            const candidates = [
+                module?.SelectedChannelStore,
+                module?.default?.SelectedChannelStore,
+                module?.default,
+                module,
+            ]
+            const candidate = candidates.find(item => typeof item?.getVoiceChannelId === 'function')
+            if (candidate) {
+                selectedChannelStore = candidate
+                logger?.log?.('[Block] Local SelectedChannelStore is ready.')
+                schedule(true)
+            }
+        })
         const unChannel = getStore('ChannelStore', (store: any) => { channelStore = store; schedule(true) })
         const unPermission = getStore('PermissionStore', (store: any) => { permissionStore = store; schedule(true) })
         const unHttp = getModules(withProps('HTTP', 'get', 'patch'), (module: any) => {
@@ -493,6 +510,7 @@ export default plugin<{ jsonStorage: BlockSettings }>({
         cleanup(
             unUser,
             unVoice,
+            unSelectedChannel,
             unChannel,
             unPermission,
             unHttp,
@@ -505,6 +523,7 @@ export default plugin<{ jsonStorage: BlockSettings }>({
                 pending.clear()
                 userStore = null
                 voiceStore = null
+                selectedChannelStore = null
                 channelStore = null
                 permissionStore = null
                 http = null
