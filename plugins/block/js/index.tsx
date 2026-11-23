@@ -303,7 +303,7 @@ export default plugin<{ jsonStorage: BlockSettings }>({
                     return
                 }
 
-                const own = resolveCurrentVoiceInfo(ownId, voiceStore, channelStore)
+                const own = resolveCurrentVoiceInfo(ownId, voiceStore, channelStore, selectedChannelStore)
                 if (!own.guildId || !own.channelId) {
                     pending.clear()
                     lastVoiceSession = ''
