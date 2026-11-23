@@ -1,11 +1,7 @@
 import React from 'react'
 import { Pressable, ScrollView, Text, TextInput, View } from 'react-native'
 import { getStore, onAnyFluxEventDispatched } from '@valenced/discord/flux'
-import { getModules } from '@valenced/modules/finders'
-import { withProps } from '@valenced/modules/finders/filters'
 import {
-    getDiscordErrorMessage,
-    getDiscordRetryAfterMs,
     getNewVoiceEntrants,
     hasPermission,
     parseCommandIds,
@@ -13,7 +9,6 @@ import {
     resolveCurrentVoiceInfo,
     resolveUserVoiceInfo,
     resolveVoiceState,
-    needsVoiceEnforcement,
 } from './helpers'
 
 interface BlockSettings {
@@ -23,6 +18,7 @@ interface BlockSettings {
     deafen: boolean
     disconnect: boolean
     status: string
+    targetStatus: string
 }
 
 const DEFAULT_SETTINGS: BlockSettings = {
@@ -31,13 +27,12 @@ const DEFAULT_SETTINGS: BlockSettings = {
     mute: true,
     deafen: true,
     disconnect: true,
-    status: 'Block is stopped.',
+    status: 'Block monitor is paused.',
+    targetStatus: 'No voice monitoring is running.',
 }
 
 const MAX_TARGETS = 20
-
-const POLL_INTERVAL_MS = 500
-
+const POLL_INTERVAL_MS = 1000
 const MUTE_MEMBERS = 1n << 22n
 const DEAFEN_MEMBERS = 1n << 23n
 const MOVE_MEMBERS = 1n << 24n
@@ -52,36 +47,46 @@ export default plugin<{ jsonStorage: BlockSettings }>({
         let poll: ReturnType<typeof setInterval> | null = null
         let checking = false
         let checkAgain = false
+
         let userStore: any = null
         let voiceStore: any = null
         let channelStore: any = null
         let permissionStore: any = null
-        let http: any = null
-        let lastStatus = ''
-        const presence = new Map<string, boolean>()
-        let lastTargetsSignature = ''
-        let lastVoiceSession = ''
-        const running = new Set<string>()
-        const retryAt = new Map<string, number>()
-        const pendingSuccess = new Map<string, number>()
-        const commands: Array<() => void> = []
 
-        const status = (message: string) => {
-            if (lastStatus === message) return
+        let lastStatus = ''
+        let lastTargetStatus = ''
+        let lastVoiceSession = ''
+        const presence = new Map<string, boolean>()
+        const commandUnsubscribers: Array<() => void> = []
+
+        const saveStatus = (message: string, details: string) => {
+            if (lastStatus === message && lastTargetStatus === details) return
             lastStatus = message
+            lastTargetStatus = details
+
             try {
-                void jsonStorage.set({ status: message })
+                const result = jsonStorage.set({
+                    status: message,
+                    targetStatus: details,
+                })
+                Promise.resolve(result).catch((error: any) => {
+                    logger?.error?.('[Block] Could not save monitor status', error)
+                })
             } catch (error) {
-                logger?.error?.('[Block] Could not save status', error)
+                logger?.error?.('[Block] Could not save monitor status', error)
             }
-            logger?.log?.('[Block]', message)
+
+            logger?.log?.('[Block]', message, details)
         }
 
         const currentUserId = (): string | null => {
             try {
                 const id = userStore?.getCurrentUser?.()?.id
-                return id ? String(id) : null
-            } catch { return null }
+                return id == null ? null : String(id)
+            } catch (error) {
+                logger?.warn?.('[Block] Could not read the current user', error)
+                return null
+            }
         }
 
         const schedule = (immediate = false) => {
@@ -90,192 +95,171 @@ export default plugin<{ jsonStorage: BlockSettings }>({
                 if (!immediate) return
                 clearTimeout(timer)
             }
+
             timer = setTimeout(() => {
                 timer = null
                 void reconcile()
             }, immediate ? 0 : 150)
         }
 
-        const action = async (userId: string, guildId: string, channelId: string, channel: any, isEntry = true) => {
-            const settings = jsonStorage.cache ?? DEFAULT_SETTINGS
-            const ownId = currentUserId()
-            if (!ownId || !http || !channel) return
-            const own = resolveCurrentVoiceInfo(ownId, voiceStore, channelStore)
-            const target = resolveUserVoiceInfo(userId, guildId, voiceStore, channelStore)
-            if (own.guildId !== guildId || own.channelId !== channelId ||
-                target.guildId !== guildId || target.channelId !== channelId) return
-
-            const results: string[] = []
-            const apply = async (
-                enabled: boolean,
-                permission: bigint,
-                label: string,
-                body: Record<string, unknown>,
-                shouldRun: boolean,
-                actionName: string,
-            ) => {
-                if (!enabled || !shouldRun) return
-                const attemptKey = guildId + ':' + channelId + ':' + userId + ':' + actionName
-                const now = Date.now()
-                if (now < (retryAt.get(attemptKey) ?? 0)) return
-                const pendingUntil = pendingSuccess.get(attemptKey) ?? 0
-                if (now < pendingUntil) return
-                if (pendingUntil) pendingSuccess.delete(attemptKey)
-                const localPermissionCheck = hasPermission(permissionStore, permission, channel)
-                const currentOwn = resolveCurrentVoiceInfo(ownId, voiceStore, channelStore)
-                const currentTarget = resolveUserVoiceInfo(userId, guildId, voiceStore, channelStore)
-                if (currentOwn.guildId !== guildId || currentOwn.channelId !== channelId ||
-                    currentTarget.guildId !== guildId || currentTarget.channelId !== channelId) {
-                    results.push(label + ': skipped; voice session changed')
-                    return
-                }
-                try {
-                    const response = await http.patch({
-                        url: '/guilds/' + guildId + '/members/' + userId,
-                        body,
-                    })
-                    const responseStatus = Number(response?.status ?? 0)
-                    if (response?.ok === false || responseStatus >= 400) {
-                        const rejection: any = new Error(getDiscordErrorMessage(response) || ('HTTP ' + responseStatus))
-                        rejection.response = response
-                        throw rejection
-                    }
-                    retryAt.delete(attemptKey)
-                    pendingSuccess.set(attemptKey, Date.now() + 2000)
-                    results.push(label + ': accepted by Discord')
-                } catch (error: any) {
-                    const retryAfterMs = getDiscordRetryAfterMs(error)
-                    const statusCode = Number(error?.status ?? error?.statusCode ?? error?.response?.status ?? 0)
-                    const discordCode = Number(error?.body?.code ?? error?.response?.body?.code ?? 0)
-                    if (retryAfterMs > 0) retryAt.set(attemptKey, Date.now() + retryAfterMs)
-                    else if (statusCode === 403 || discordCode === 50013) retryAt.set(attemptKey, Number.POSITIVE_INFINITY)
-                    else retryAt.delete(attemptKey)
-                    const detail = getDiscordErrorMessage(error)
-                    const localNote = permissionStore && !localPermissionCheck
-                        ? ' (the local permission check was negative too)'
-                        : ''
-                    results.push(label + ': rejected' + (detail ? ' (' + detail + ')' : '') + localNote)
-                    logger?.warn?.('[Block] Discord rejected ' + label, { userId, guildId, error })
-                }
-            }
-
-            const currentState = resolveVoiceState(userId, guildId, voiceStore)
-            const muteKey = guildId + ':' + channelId + ':' + userId + ':mute'
-            const deafenKey = guildId + ':' + channelId + ':' + userId + ':deafen'
-            if (currentState?.mute === true || settings.mute === false) pendingSuccess.delete(muteKey)
-            if (currentState?.deaf === true || settings.deafen === false) pendingSuccess.delete(deafenKey)
-            if (resolveUserVoiceInfo(userId, guildId, voiceStore, channelStore).channelId !== channelId) {
-                pendingSuccess.delete(guildId + ':' + channelId + ':' + userId + ':disconnect')
-            }
-            await apply(settings.mute !== false, MUTE_MEMBERS, 'Server mute', { mute: true }, currentState?.mute !== true, 'mute')
-            await apply(settings.deafen !== false, DEAFEN_MEMBERS, 'Server deafen', { deaf: true }, currentState?.deaf !== true, 'deafen')
-            await apply(settings.disconnect !== false, MOVE_MEMBERS, 'Disconnect', { channel_id: null }, true, 'disconnect')
-
-            if (results.length) {
-                const summary = userId + ': ' + results.join('; ')
-                status(summary)
-            }
-        }
-
         async function reconcile() {
             if (stopped) return
-            if (checking) { checkAgain = true; return }
+            if (checking) {
+                checkAgain = true
+                return
+            }
+
             checking = true
             try {
                 const settings = jsonStorage.cache ?? DEFAULT_SETTINGS
+
                 if (!settings.enabled) {
                     presence.clear()
-                    lastTargetsSignature = ''
                     lastVoiceSession = ''
-                    retryAt.clear()
-                    pendingSuccess.clear()
+                    saveStatus(
+                        'Block monitor is paused. Saved IDs and settings are kept.',
+                        'Enable the monitor from Configure or use /block to start watching.',
+                    )
                     return
                 }
 
                 const parsed = parseTargetIds(settings.userIds, MAX_TARGETS)
-                const ids = parsed.ids
                 if (parsed.invalid.length) {
-                    status('Invalid saved ID(s): ' + parsed.invalid.slice(0, 3).join(', ') + '. Fix them in Configure.')
+                    saveStatus(
+                        'Invalid saved user ID(s).',
+                        'Fix these IDs in Configure: ' + parsed.invalid.slice(0, 5).join(', '),
+                    )
                     return
                 }
                 if (parsed.overflow) {
-                    status('Only the first ' + MAX_TARGETS + ' unique valid IDs can be watched.')
+                    saveStatus(
+                        'Too many saved targets.',
+                        'Block supports up to ' + MAX_TARGETS + ' unique Discord user IDs. Remove the extras in Configure.',
+                    )
+                    return
                 }
-                if (!ids.length) { status('Add valid user IDs in Configure or use /block.'); return }
-                const signature = ids.join(':')
-                if (signature !== lastTargetsSignature) {
-                    presence.clear()
-                    retryAt.clear()
-                    pendingSuccess.clear()
-                    lastTargetsSignature = signature
+                if (!parsed.ids.length) {
+                    saveStatus('No targets are configured.', 'Add at least one valid Discord user ID in Configure.')
+                    return
                 }
+
+                const missingStores: string[] = []
+                if (!userStore) missingStores.push('UserStore')
+                if (!voiceStore) missingStores.push('VoiceStateStore')
+                if (!channelStore) missingStores.push('ChannelStore')
+                if (!permissionStore) missingStores.push('PermissionStore')
+
+                if (missingStores.length) {
+                    saveStatus(
+                        'Waiting for Discord ' + missingStores[0] + '.',
+                        'Required stores not ready: ' + missingStores.join(', ') + '.',
+                    )
+                    return
+                }
+
                 const ownId = currentUserId()
-                if (!ownId) { status('Waiting for your Discord account to load.'); return }
+                if (!ownId) {
+                    saveStatus('Waiting for your Discord account to load.', 'UserStore is ready, but the current account is not available yet.')
+                    return
+                }
+
                 const own = resolveCurrentVoiceInfo(ownId, voiceStore, channelStore)
                 if (!own.guildId || !own.channelId) {
                     presence.clear()
                     lastVoiceSession = ''
-                    retryAt.clear()
-                    pendingSuccess.clear()
-                    status('Armed. Waiting for you to join voice; protection resumes automatically.')
-                    return
-                }
-                const voiceSession = own.guildId + ':' + own.channelId
-                if (voiceSession !== lastVoiceSession) {
-                    presence.clear()
-                    retryAt.clear()
-                    pendingSuccess.clear()
-                    lastVoiceSession = voiceSession
-                }
-                const channel = own.channel ?? channelStore?.getChannel?.(own.channelId)
-                if (!channel) {
-                    status('Your current voice channel is not available in Discord yet.')
-                    return
-                }
-                if (!http) {
-                    status('Waiting for Discord HTTP module (HTTP.patch) to load.')
+                    saveStatus('Waiting for you to join a voice channel.', 'The monitor will resume automatically when your account joins voice.')
                     return
                 }
 
-                const watchIds = ids.filter(id => id !== ownId)
+                const voiceSession = own.guildId + ':' + own.channelId
+                if (voiceSession !== lastVoiceSession) {
+                    presence.clear()
+                    lastVoiceSession = voiceSession
+                }
+
+                const channel = own.channel ?? channelStore?.getChannel?.(own.channelId) ?? null
+                if (!channel) {
+                    saveStatus('Waiting for your voice channel to load.', 'Current channel ID: ' + own.channelId)
+                    return
+                }
+
+                const ids = parsed.ids.filter(id => id !== ownId)
                 const entrants = getNewVoiceEntrants(
-                    watchIds,
+                    ids,
                     own.guildId,
                     own.channelId,
                     presence,
                     id => resolveUserVoiceInfo(id, own.guildId, voiceStore, channelStore),
                 )
-                const entrantSet = new Set(entrants)
-                for (const id of watchIds) {
+
+                const detected: string[] = []
+                for (const id of ids) {
                     const target = resolveUserVoiceInfo(id, own.guildId, voiceStore, channelStore)
-                    if (target.guildId !== own.guildId || target.channelId !== own.channelId) {
-                        const prefix = own.guildId + ':' + own.channelId + ':' + id + ':'
-                        pendingSuccess.delete(prefix + 'mute')
-                        pendingSuccess.delete(prefix + 'deafen')
-                        continue
-                    }
-                    const key = own.guildId + ':' + own.channelId + ':' + id
-                    if (running.has(key)) continue
+                    if (target.guildId !== own.guildId || target.channelId !== own.channelId) continue
+
                     const state = resolveVoiceState(id, own.guildId, voiceStore)
-                    const needsEnforcement = needsVoiceEnforcement(
-                        state,
-                        settings.mute !== false,
-                        settings.deafen !== false,
-                    ) || settings.disconnect !== false
-                    if (!entrantSet.has(id) && !needsEnforcement) continue
-                    running.add(key)
-                    try { await action(id, own.guildId, own.channelId, channel, entrantSet.has(id)) }
-                    finally { running.delete(key) }
+                    const details: string[] = [id + ': detected in your current voice channel']
+
+                    if (settings.mute !== false) {
+                        const actual = state?.mute === true ? 'server-muted' : 'not server-muted'
+                        const permission = hasPermission(permissionStore, MUTE_MEMBERS, channel) ? 'locally allowed' : 'locally denied'
+                        details.push('Mute state: ' + actual + ' (Mute Members: ' + permission + ')')
+                    }
+
+                    if (settings.deafen !== false) {
+                        const actual = state?.deaf === true ? 'server-deafened' : 'not server-deafened'
+                        const permission = hasPermission(permissionStore, DEAFEN_MEMBERS, channel) ? 'locally allowed' : 'locally denied'
+                        details.push('Deafen state: ' + actual + ' (Deafen Members: ' + permission + ')')
+                    }
+
+                    if (settings.disconnect !== false) {
+                        const permission = hasPermission(permissionStore, MOVE_MEMBERS, channel) ? 'locally allowed' : 'locally denied'
+                        details.push('Disconnect permission: ' + permission + '; use Discord controls manually if needed')
+                    }
+
+                    detected.push(details.join(' | '))
                 }
-                if (!entrants.length && String(jsonStorage.cache?.status ?? '').startsWith('Armed')) {
-                    status('Watching ' + watchIds.length + ' configured user(s) in your current voice channel.')
-                }
+
+                const permissionSummary = [
+                    settings.mute !== false
+                        ? 'Mute Members: ' + (hasPermission(permissionStore, MUTE_MEMBERS, channel) ? 'allowed' : 'not granted')
+                        : '',
+                    settings.deafen !== false
+                        ? 'Deafen Members: ' + (hasPermission(permissionStore, DEAFEN_MEMBERS, channel) ? 'allowed' : 'not granted')
+                        : '',
+                    settings.disconnect !== false
+                        ? 'Move Members: ' + (hasPermission(permissionStore, MOVE_MEMBERS, channel) ? 'allowed' : 'not granted')
+                        : '',
+                ].filter(Boolean).join(' | ')
+
+                const targetDetails = detected.length
+                    ? detected.join('\n\n') + '\n\nPermission check is informational only. Discord remains authoritative.'
+                    : 'No configured targets are currently in your voice channel.\n\n' + permissionSummary
+
+                const statusMessage = detected.length
+                    ? (entrants.length
+                        ? 'Target detected. ' + detected.length + ' configured target(s) are in your channel.'
+                        : 'Monitoring ' + ids.length + ' configured target(s). ' + detected.length + ' currently present.')
+                    : 'Voice monitor active. Monitoring ' + ids.length + ' configured target(s).'
+
+                saveStatus(
+                    statusMessage,
+                    targetDetails + '\n\nBlock is monitor-only. It does not send mute, deafen, or disconnect requests.',
+                )
             } catch (error: any) {
-                logger?.error?.('[Block] Protection check failed', error)
-                status('Block check failed. See Debug Logs.')
+                const message = error instanceof Error ? error.message : String(error ?? 'Unknown error')
+                logger?.error?.('[Block] Monitor reconciliation failed', {
+                    message,
+                    stack: error?.stack,
+                    error,
+                })
+                saveStatus('Voice monitor check failed.', message + '. See Block debug logs.')
             } finally {
                 checking = false
-                if (checkAgain) { checkAgain = false; schedule(true) }
+                if (checkAgain) {
+                    checkAgain = false
+                    schedule(true)
+                }
             }
         }
 
@@ -284,11 +268,11 @@ export default plugin<{ jsonStorage: BlockSettings }>({
             if (typeof registry?.registerCommand !== 'function') {
                 logger?.warn?.("[Block] Coco's Command Lib unavailable; use Configure instead.")
             } else {
-                commands.push(registry.registerCommand({
+                commandUnsubscribers.push(registry.registerCommand({
                     name: 'block',
                     displayName: 'block',
-                    description: 'Enable voice protection for selected user IDs',
-                    displayDescription: 'Watch your current voice channel for selected users',
+                    description: 'Start monitoring selected user IDs in your current voice channel',
+                    displayDescription: 'Monitor up to 20 Discord user IDs in your current voice channel',
                     applicationId: '-1',
                     inputType: 1,
                     type: 1,
@@ -297,62 +281,82 @@ export default plugin<{ jsonStorage: BlockSettings }>({
                         name: 'id' + (index + 1),
                         displayName: 'id' + (index + 1),
                         description: 'Discord user ID ' + (index + 1),
-                        displayDescription: 'Discord user ID to watch',
+                        displayDescription: 'Discord user ID to monitor',
                         type: 3,
                         required: index === 0,
                     })),
                     execute: async (args: any[]) => {
-                        const parsed = parseCommandIds(args, MAX_TARGETS)
-                        if (parsed.error) {
-                            status(parsed.error)
+                        const parsedCommand = parseCommandIds(args, MAX_TARGETS)
+                        if (parsedCommand.error) {
+                            saveStatus('Could not start the monitor.', parsedCommand.error)
                             return
                         }
-                        const ids = parsed.ids
+
                         presence.clear()
                         await jsonStorage.set({
-                            userIds: ids.join('\n'),
+                            userIds: parsedCommand.ids.join('\n'),
                             enabled: true,
-                            status: 'Armed. Waiting for your active voice channel.',
+                            status: 'Voice monitor is starting.',
+                            targetStatus: 'Waiting for Discord stores and your current voice channel.',
                         })
-                        status('Armed. Waiting for your active voice channel.')
+                        lastStatus = ''
+                        lastTargetStatus = ''
                         schedule(true)
                     },
                 }))
-                commands.push(registry.registerCommand({
+
+                commandUnsubscribers.push(registry.registerCommand({
                     name: 'unblock',
                     displayName: 'unblock',
-                    description: 'Pause Block voice protection',
-                    displayDescription: 'Pause Block voice protection',
+                    description: 'Pause the Block voice monitor without deleting saved IDs',
+                    displayDescription: 'Pause Block monitoring and keep saved settings',
                     applicationId: '-1',
                     inputType: 1,
                     type: 1,
                     shouldHide: () => false,
                     execute: async () => {
                         presence.clear()
-                        await jsonStorage.set({ enabled: false, status: 'Block is paused. Saved IDs are kept.' })
-                        status('Block is paused. Saved IDs are kept.')
+                        await jsonStorage.set({
+                            enabled: false,
+                            status: 'Block monitor is paused. Saved IDs and settings are kept.',
+                            targetStatus: 'No voice monitoring is running.',
+                        })
+                        lastStatus = ''
+                        lastTargetStatus = ''
+                        schedule(true)
                     },
                 }))
             }
         } catch (error) {
             logger?.error?.('[Block] Could not register commands', error)
+            saveStatus('Slash commands could not be registered.', "Check that Coco's Command Lib is installed and enabled.")
         }
 
-        const unUser = getStore('UserStore', (store: any) => { userStore = store; schedule(true) })
-        const unVoice = getStore('VoiceStateStore', (store: any) => { voiceStore = store; schedule(true) })
-        const unChannel = getStore('ChannelStore', (store: any) => { channelStore = store; schedule(true) })
-        const unPermission = getStore('PermissionStore', (store: any) => { permissionStore = store; schedule(true) })
-        const unHttp = getModules(withProps('HTTP', 'get', 'patch'), (module: any) => {
-            if (module?.HTTP && typeof module.HTTP.patch === 'function') {
-                http = module.HTTP
-                schedule(true)
-            }
+        const unUser = getStore('UserStore', (store: any) => {
+            userStore = store
+            schedule(true)
         })
+        const unVoice = getStore('VoiceStateStore', (store: any) => {
+            voiceStore = store
+            schedule(true)
+        })
+        const unChannel = getStore('ChannelStore', (store: any) => {
+            channelStore = store
+            schedule(true)
+        })
+        const unPermission = getStore('PermissionStore', (store: any) => {
+            permissionStore = store
+            schedule(true)
+        })
+
         const unFlux = onAnyFluxEventDispatched((payload: any) => {
             const type = String(payload?.type ?? '')
-            if (type.includes('VOICE_STATE') || type.includes('CHANNEL_UPDATE') ||
-                type.includes('GUILD_ROLE_UPDATE') || type.includes('GUILD_MEMBER_UPDATE')) {
-                if (type.includes('CHANNEL_UPDATE') || type.includes('GUILD_ROLE_UPDATE') || type.includes('GUILD_MEMBER_UPDATE')) retryAt.clear()
+            if (
+                type.includes('VOICE_STATE') ||
+                type.includes('CHANNEL_UPDATE') ||
+                type.includes('GUILD_ROLE_UPDATE') ||
+                type.includes('GUILD_MEMBER_UPDATE')
+            ) {
                 schedule(true)
             }
             return payload
@@ -362,103 +366,200 @@ export default plugin<{ jsonStorage: BlockSettings }>({
         schedule(true)
 
         cleanup(
-            unUser, unVoice, unChannel, unPermission, unHttp, unFlux, ...commands,
+            unUser,
+            unVoice,
+            unChannel,
+            unPermission,
+            unFlux,
+            ...commandUnsubscribers,
             () => {
                 stopped = true
                 if (timer) clearTimeout(timer)
                 if (poll) clearInterval(poll)
                 presence.clear()
-                running.clear()
-                retryAt.clear()
-                pendingSuccess.clear()
                 lastVoiceSession = ''
+                userStore = null
+                voiceStore = null
+                channelStore = null
+                permissionStore = null
             },
         )
     },
 
     SettingsComponent({ api }) {
-            const settings = api.jsonStorage.use() ?? DEFAULT_SETTINGS
-            const [draft, setDraft] = React.useState(String(settings.userIds ?? ''))
-            const [validationError, setValidationError] = React.useState('')
-            React.useEffect(() => setDraft(String(settings.userIds ?? '')), [settings.userIds])
-            const button = {
-                paddingVertical: 12, paddingHorizontal: 16, borderRadius: 8,
-                alignItems: 'center' as const, marginTop: 10,
-            }
-            const text = { color: '#F2F3F5', fontSize: 15, fontWeight: '600' as const }
-            const muted = '#B5BAC1'
-            const saveDraft = (enable: boolean) => {
-                const parsed = parseTargetIds(draft, MAX_TARGETS)
-                if (parsed.invalid.length || parsed.overflow || parsed.ids.length === 0) {
-                    setValidationError(parsed.invalid.length
-                        ? 'Some IDs are invalid. Use numeric Discord user IDs.'
+        const settings = api.jsonStorage.use() ?? DEFAULT_SETTINGS
+        const [draft, setDraft] = React.useState(String(settings.userIds ?? ''))
+        const [validationError, setValidationError] = React.useState('')
+
+        React.useEffect(() => {
+            setDraft(String(settings.userIds ?? ''))
+        }, [settings.userIds])
+
+        const buttonStyle = {
+            paddingVertical: 12,
+            paddingHorizontal: 16,
+            borderRadius: 10,
+            alignItems: 'center' as const,
+            marginTop: 8,
+        }
+        const buttonText = { color: '#FFFFFF', fontSize: 15, fontWeight: '700' as const }
+        const textColor = '#F2F3F5'
+        const muted = '#B5BAC1'
+
+        const saveTargets = (enable: boolean) => {
+            const parsed = parseTargetIds(draft, MAX_TARGETS)
+            if (parsed.invalid.length || parsed.overflow || parsed.ids.length === 0) {
+                setValidationError(
+                    parsed.invalid.length
+                        ? 'Invalid ID(s): ' + parsed.invalid.slice(0, 5).join(', ')
                         : parsed.overflow
                             ? 'You can save up to ' + MAX_TARGETS + ' unique IDs.'
-                            : 'Add at least one user ID.')
-                    return
-                }
-                setValidationError('')
-                const normalized = parsed.ids.join('\n')
-                setDraft(normalized)
-                void api.jsonStorage.set({
-                    userIds: normalized,
-                    ...(enable ? {
-                        enabled: true,
-                        status: 'Armed. Waiting for your active voice channel.',
-                    } : {}),
-                })
+                            : 'Add at least one Discord user ID.',
+                )
+                return
             }
-            return (
-                <ScrollView contentContainerStyle={{ padding: 16 }}>
-                    <View style={{ gap: 8 }}>
-                        <Text style={{ color: '#F2F3F5', fontSize: 21, fontWeight: '700' }}>Block</Text>
-                        <Text style={{ color: muted, fontSize: 14, lineHeight: 20 }}>
-                            Protect your current voice channel across servers. Block watches the IDs below and keeps enabled actions enforced while they remain in your channel. Protection pauses when you leave voice and resumes when you join again.
+
+            setValidationError('')
+            const normalized = parsed.ids.join('\n')
+            setDraft(normalized)
+            void api.jsonStorage.set({
+                userIds: normalized,
+                ...(enable ? {
+                    enabled: true,
+                    status: 'Voice monitor is starting.',
+                    targetStatus: 'Waiting for Discord stores and your current voice channel.',
+                } : {}),
+            })
+        }
+
+        const toggleMonitor = (key: 'mute' | 'deafen' | 'disconnect') => {
+            void api.jsonStorage.set({ [key]: !settings[key] })
+        }
+
+        return (
+            <ScrollView contentContainerStyle={{ padding: 16, paddingBottom: 32 }}>
+                <View style={{ gap: 9 }}>
+                    <Text style={{ color: textColor, fontSize: 22, fontWeight: '800' }}>Block</Text>
+                    <Text style={{ color: muted, fontSize: 14, lineHeight: 20 }}>
+                        Monitor selected Discord user IDs in the voice channel you are currently connected to.
+                        Monitoring pauses when you leave voice and resumes when you join another channel.
+                    </Text>
+
+                    <Text style={{ color: textColor, fontSize: 16, fontWeight: '700', marginTop: 10 }}>Watched user IDs</Text>
+                    <Text style={{ color: muted, fontSize: 12 }}>Enter up to 20 unique numeric Discord user IDs, one per line or separated by commas.</Text>
+                    <TextInput
+                        value={draft}
+                        onChangeText={setDraft}
+                        placeholder={'123456789012345678\n234567890123456789'}
+                        placeholderTextColor="#72767D"
+                        multiline
+                        autoCapitalize="none"
+                        autoCorrect={false}
+                        keyboardType="numeric"
+                        textAlignVertical="top"
+                        style={{
+                            minHeight: 130,
+                            padding: 13,
+                            borderRadius: 10,
+                            color: textColor,
+                            backgroundColor: 'rgba(128,128,128,0.16)',
+                            borderWidth: 1,
+                            borderColor: 'rgba(255,255,255,0.12)',
+                            fontSize: 15,
+                        }}
+                    />
+
+                    {!!validationError && <Text style={{ color: '#ED4245', fontSize: 13 }}>{validationError}</Text>}
+
+                    <Pressable onPress={() => saveTargets(false)} style={{ ...buttonStyle, backgroundColor: '#4E5058' }}>
+                        <Text style={buttonText}>Save IDs</Text>
+                    </Pressable>
+                    <Pressable onPress={() => saveTargets(true)} style={{ ...buttonStyle, backgroundColor: '#5865F2' }}>
+                        <Text style={buttonText}>Enable monitor</Text>
+                    </Pressable>
+                    <Pressable
+                        onPress={() => void api.jsonStorage.set({
+                            enabled: false,
+                            status: 'Block monitor is paused. Saved IDs and settings are kept.',
+                            targetStatus: 'No voice monitoring is running.',
+                        })}
+                        style={{ ...buttonStyle, backgroundColor: '#4E5058' }}
+                    >
+                        <Text style={buttonText}>Pause monitor</Text>
+                    </Pressable>
+
+                    <Text style={{ color: textColor, fontSize: 17, fontWeight: '800', marginTop: 16 }}>Voice-state checks</Text>
+                    <Text style={{ color: muted, fontSize: 12, lineHeight: 18 }}>
+                        These switches control which state and permission details appear in the monitor. They do not execute moderation actions.
+                    </Text>
+
+                    {([
+                        ['mute', 'Track server mute', 'Show whether a detected user is server-muted and whether Mute Members is locally available.'],
+                        ['deafen', 'Track server deafen', 'Show whether a detected user is server-deafened and whether Deafen Members is locally available.'],
+                        ['disconnect', 'Track disconnect eligibility', 'Show whether Move Members is locally available for the current voice channel.'],
+                    ] as const).map(([key, title, description]) => (
+                        <Pressable
+                            key={key}
+                            onPress={() => toggleMonitor(key)}
+                            accessibilityRole="switch"
+                            accessibilityState={{ checked: settings[key] !== false }}
+                            style={{
+                                flexDirection: 'row',
+                                alignItems: 'center',
+                                justifyContent: 'space-between',
+                                padding: 13,
+                                borderRadius: 10,
+                                marginTop: 6,
+                                backgroundColor: 'rgba(128,128,128,0.13)',
+                                borderWidth: 1,
+                                borderColor: settings[key] !== false ? 'rgba(88,101,242,0.65)' : 'rgba(255,255,255,0.08)',
+                            }}
+                        >
+                            <View style={{ flex: 1, gap: 3, paddingRight: 12 }}>
+                                <Text style={buttonText}>{title}</Text>
+                                <Text style={{ color: muted, fontSize: 12, lineHeight: 17 }}>{description}</Text>
+                            </View>
+                            <View style={{
+                                paddingHorizontal: 12,
+                                paddingVertical: 6,
+                                borderRadius: 20,
+                                backgroundColor: settings[key] !== false ? '#5865F2' : '#4E5058',
+                            }}>
+                                <Text style={{ color: '#FFFFFF', fontSize: 12, fontWeight: '800' }}>
+                                    {settings[key] !== false ? 'ON' : 'OFF'}
+                                </Text>
+                            </View>
+                        </Pressable>
+                    ))}
+
+                    <View style={{
+                        marginTop: 18,
+                        padding: 14,
+                        borderRadius: 12,
+                        backgroundColor: 'rgba(128,128,128,0.13)',
+                        borderWidth: 1,
+                        borderColor: 'rgba(255,255,255,0.10)',
+                        gap: 7,
+                    }}>
+                        <Text style={{ color: textColor, fontSize: 16, fontWeight: '800' }}>Monitor status</Text>
+                        <Text style={{ color: settings.enabled ? '#57F287' : muted, fontSize: 13, fontWeight: '800' }}>
+                            {settings.enabled ? 'MONITOR ENABLED' : 'PAUSED'}
                         </Text>
-                        <Text style={{ color: '#F2F3F5', fontSize: 15, fontWeight: '700', marginTop: 14 }}>Watched users</Text>
-                        <Text style={{ color: muted, fontSize: 12 }}>Add up to 20 Discord user IDs, one per line or separated by commas.</Text>
-                        <TextInput value={draft} onChangeText={setDraft}
-                            placeholder={'123456789012345678\n234567890123456789'}
-                            placeholderTextColor="#72767D" multiline autoCapitalize="none"
-                            autoCorrect={false} keyboardType="numeric" textAlignVertical="top"
-                            style={{ minHeight: 120, padding: 14, borderRadius: 12, color: '#F2F3F5', backgroundColor: 'rgba(128,128,128,0.16)', fontSize: 15, borderWidth: 1, borderColor: 'rgba(255,255,255,0.10)' }} />
-                        {!!validationError && <Text style={{ color: '#ED4245', fontSize: 13 }}>{validationError}</Text>}
-                        <Pressable onPress={() => saveDraft(false)}
-                            style={{ ...button, backgroundColor: '#4E5058' }}>
-                            <Text style={text}>Save IDs</Text>
-                        </Pressable>
-                        <Pressable onPress={() => saveDraft(true)} style={{ ...button, backgroundColor: '#5865F2' }}>
-                            <Text style={text}>Enable Block</Text>
-                        </Pressable>
-                        <Pressable onPress={() => {
-                            void api.jsonStorage.set({ enabled: false, status: 'Block is paused. Saved IDs are kept.' })
-                        }} style={{ ...button, backgroundColor: '#4E5058' }}>
-                            <Text style={text}>Pause Block</Text>
-                        </Pressable>
-                        <Text style={{ color: '#F2F3F5', fontSize: 17, fontWeight: '700', marginTop: 18 }}>Moderation actions</Text>
-                        <Text style={{ color: muted, fontSize: 12 }}>Each action is independent and only works when your Discord account has the required permission.</Text>
-                        {(['mute', 'deafen', 'disconnect'] as const).map((key) => (
-                            <Pressable key={key} onPress={() => void api.jsonStorage.set({ [key]: !settings[key] })}
-                                style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', padding: 14, borderRadius: 12, marginTop: 8, backgroundColor: 'rgba(128,128,128,0.13)', borderWidth: 1, borderColor: settings[key] ? 'rgba(88,101,242,0.65)' : 'rgba(255,255,255,0.08)' }}>
-                                <View style={{ flex: 1, gap: 3 }}>
-                                    <Text style={text}>{key === 'mute' ? 'Server mute' : key === 'deafen' ? 'Server deafen' : 'Disconnect'}</Text>
-                                    <Text style={{ color: muted, fontSize: 12 }}>{key === 'mute' ? 'Re-mute if they unmute themselves' : key === 'deafen' ? 'Re-deafen if they undeafen themselves' : 'Disconnect when they enter your voice channel'}</Text>
-                                </View>
-                                <View style={{ paddingHorizontal: 12, paddingVertical: 6, borderRadius: 20, backgroundColor: settings[key] ? '#5865F2' : '#4E5058' }}>
-                                    <Text style={{ color: '#FFFFFF', fontSize: 12, fontWeight: '700' }}>{settings[key] ? 'ON' : 'OFF'}</Text>
-                                </View>
-                            </Pressable>
-                        ))}
-                        <View style={{ marginTop: 18, padding: 14, borderRadius: 12, backgroundColor: 'rgba(128,128,128,0.13)', borderWidth: 1, borderColor: 'rgba(255,255,255,0.08)', gap: 6 }}>
-                            <Text style={{ color: '#F2F3F5', fontSize: 15, fontWeight: '700' }}>Protection status</Text>
-                            <Text style={{ color: settings.enabled ? '#57F287' : muted, fontSize: 13, fontWeight: '700' }}>{settings.enabled ? 'ACTIVE' : 'PAUSED'}</Text>
-                            <Text style={{ color: muted, fontSize: 13, lineHeight: 19 }}>{String(settings.status ?? 'Block is stopped.')}</Text>
-                        </View>
-                        <Text style={{ color: muted, fontSize: 12, marginTop: 8 }}>
-                            Server mute and deafen require their respective Discord permissions. Disconnect requires Move Members. Discord role hierarchy and server rules can still reject an action. Disconnect does not permanently ban someone from a server.
+                        <Text style={{ color: muted, fontSize: 13, lineHeight: 19 }}>
+                            {String(settings.status ?? 'Block monitor is paused.')}
+                        </Text>
+                        <View style={{ height: 1, backgroundColor: 'rgba(255,255,255,0.12)', marginVertical: 4 }} />
+                        <Text style={{ color: textColor, fontSize: 14, fontWeight: '700' }}>Target details</Text>
+                        <Text selectable style={{ color: muted, fontSize: 12, lineHeight: 18 }}>
+                            {String(settings.targetStatus ?? 'No voice monitoring is running.')}
                         </Text>
                     </View>
-                </ScrollView>
-            )
+
+                    <Text style={{ color: muted, fontSize: 12, lineHeight: 18, marginTop: 8 }}>
+                        Permission results are informational and may not include every server-side restriction. Discord makes the final permission decision. Block does not send moderation HTTP requests; use Discord's built-in voice-channel controls for any moderation action.
+                    </Text>
+                </View>
+            </ScrollView>
+        )
     },
 })
